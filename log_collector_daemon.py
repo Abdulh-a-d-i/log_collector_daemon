@@ -48,30 +48,29 @@ class LogCollectorDaemon:
             return []
 
     def get_logs_last_minute(self):
-        current_time = datetime.now()
-        one_minute_ago = current_time - timedelta(minutes=1)
-        
-        if self.first_run:
-            self.first_run = False
-            return self.get_initial_logs()
-        
-        if not self.last_processed_time:
-            self.last_processed_time = one_minute_ago
-        
+    current_time = datetime.now()
+    one_minute_ago = current_time - timedelta(minutes=1)
+    
+    try:
+        # Read last 500 lines (you can adjust this if logs are sparse/dense)
+        with open(self.log_file_path, 'r') as f:
+            recent_lines = tailer.tail(f, 500)
+
         logs = []
-        try:
-            # Use tail to read only recent lines, reducing memory usage
-            with open(self.log_file_path, 'r') as f:
-                for line in tailer.follow(f, delay=0.1):
-                    log_time = self.parse_log_timestamp(line)
-                    if log_time and one_minute_ago <= log_time <= current_time:
-                        logs.append(line)
-            logger.info(f"Collected {len(logs)} logs from last minute at {current_time}")
-            self.last_processed_time = current_time
-            return logs
-        except Exception as e:
-            logger.error(f"Error reading logs: {e}")
-            return []
+        for line in recent_lines:
+            log_time = self.parse_log_timestamp(line)
+            if log_time:
+                # Adjust if log time has no year info
+                if log_time.year == 1900:
+                    log_time = log_time.replace(year=current_time.year)
+                if one_minute_ago <= log_time <= current_time:
+                    logs.append(line)
+        
+        logger.info(f"Collected {len(logs)} logs from last minute at {current_time}")
+        return logs
+    except Exception as e:
+        logger.error(f"Error reading logs: {e}")
+        return []
 
     def create_tar_gz(self, logs):
         try:
