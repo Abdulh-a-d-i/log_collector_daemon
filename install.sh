@@ -16,13 +16,21 @@ validate_input "$LOG_FILE_PATH" "Log file path"
 
 read -p "Enter local save directory (e.g., /home/user/logs): " SAVE_DIR
 validate_input "$SAVE_DIR" "Save directory"
+if [[ "$SAVE_DIR" == *"/log_collector_deamon" ]]; then
+    echo "Did you mean /home/log_collector_daemon? (y/n)"
+    read -r confirm
+    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+        SAVE_DIR="/home/log_collector_daemon"
+        echo "Corrected to $SAVE_DIR"
+    fi
+fi
 
 read -p "Enter API endpoint URL (optional, press Enter to skip): " API_URL
 
 # Get current user and Python path
 CURRENT_USER=$(whoami)
 PYTHON_PATH=$(which python3)
-SCRIPT_PATH=$(realpath "$(dirname "$0")/log_collector_daemon.py")
+SCRIPT_PATH=$(realpath "$PWD/log_collector_daemon.py")
 
 # Validate Python and script existence
 if [ ! -f "$PYTHON_PATH" ]; then
@@ -30,8 +38,10 @@ if [ ! -f "$PYTHON_PATH" ]; then
     exit 1
 fi
 
-if [ ! -f "$SCRIPT_PATH" ]; then
-    echo "Error: log_collector_daemon.py not found"
+if [ -f "$SCRIPT_PATH" ]; then
+    echo "Using script path: $SCRIPT_PATH"
+else
+    echo "Error: log_collector_daemon.py not found at $SCRIPT_PATH"
     exit 1
 fi
 
