@@ -1,10 +1,10 @@
 [Unit]
-Description=Log Collector Daemon Service
+Description=Log Collector Daemon
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=__PYTHON_PATH__ __SCRIPT_PATH__ __LOG_DIRECTORY__ __DESTINATION__
+User={USER}
+ExecStart={EXEC_START}
 Restart=always
 RestartSec=10
 StandardOutput=journal
