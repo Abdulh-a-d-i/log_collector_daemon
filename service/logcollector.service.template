@@ -1,0 +1,14 @@
+[Unit]
+Description=Log Collector Daemon Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/username/your-repo/log_collector_daemon.py /path/to/logs
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
