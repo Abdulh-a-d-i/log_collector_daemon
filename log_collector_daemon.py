@@ -7,8 +7,8 @@ import requests
 from datetime import datetime
 
 def compress_logs(log_dir, output_dir):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    archive_name = os.path.join(output_dir, f"logs_{timestamp}.tar.gz")
+    archive_name = os.path.join(output_dir, "latest_logs.tar.gz")
+
 
     with tarfile.open(archive_name, "w:gz") as tar:
         tar.add(log_dir, arcname=os.path.basename(log_dir))
