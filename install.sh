@@ -12,6 +12,9 @@ if [ ! -e "$LOG_DIR" ]; then
     exit 1
 fi
 
+echo "Enter destination (IP:PORT or SCP path). Leave blank to save locally:"
+read DESTINATION
+
 PYTHON_PATH=$(which python3)
 
 # Generate service file by replacing placeholders
@@ -19,11 +22,12 @@ sudo sed \
     -e "s|__PYTHON_PATH__|$PYTHON_PATH|" \
     -e "s|__SCRIPT_PATH__|$REPO_PATH/log_collector_daemon.py|" \
     -e "s|__LOG_DIRECTORY__|$LOG_DIR|" \
+    -e "s|__DESTINATION__|$DESTINATION|" \
     $SERVICE_TEMPLATE | sudo tee $SERVICE_FILE > /dev/null
 
 # Reload systemd and enable service
 sudo systemctl daemon-reload
 sudo systemctl enable logcollector.service
-sudo systemctl start logcollector.service
+sudo systemctl restart logcollector.service
 
 echo "Service installed and started successfully!"
