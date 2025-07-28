@@ -7,10 +7,10 @@ SERVICE_NAME=logcollector
 SERVICE_FILE=/etc/systemd/system/$SERVICE_NAME.service
 SCRIPT_PATH=$(pwd)/log_collector_daemon.py
 
-read -p "Enter full path of the log directory to monitor: " LOG_DIRECTORY
+read -p "Enter full path of the log directory or file to monitor: " LOG_PATH
 
-if [ ! -d "$LOG_DIRECTORY" ]; then
-    echo "Directory does not exist. Exiting."
+if [ ! -e "$LOG_PATH" ]; then
+    echo "Path does not exist. Exiting."
     exit 1
 fi
 
@@ -22,7 +22,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 $SCRIPT_PATH $LOG_DIRECTORY $DESTINATION
+ExecStart=/usr/bin/python3 $SCRIPT_PATH $LOG_PATH $DESTINATION
 Restart=on-failure
 
 [Install]
