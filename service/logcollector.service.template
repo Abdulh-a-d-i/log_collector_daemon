@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /home/username/your-repo/log_collector_daemon.py /path/to/logs
+ExecStart=__PYTHON_PATH__ __SCRIPT_PATH__ __LOG_DIRECTORY__ __DESTINATION__
 Restart=always
 RestartSec=10
 StandardOutput=journal
