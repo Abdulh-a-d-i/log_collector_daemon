@@ -1,33 +1,35 @@
 #!/bin/bash
 
-REPO_PATH=$(pwd)
-SERVICE_TEMPLATE="$REPO_PATH/service/logcollector.service.template"
-SERVICE_FILE="/etc/systemd/system/logcollector.service"
+# install.sh
+# This script will install the log collector daemon service
 
-echo "Enter full path of the log directory to monitor:"
-read LOG_DIR
+SERVICE_NAME=logcollector
+SERVICE_FILE=/etc/systemd/system/$SERVICE_NAME.service
+SCRIPT_PATH=$(pwd)/log_collector_daemon.py
 
-if [ ! -e "$LOG_DIR" ]; then
-    echo "Path does not exist. Exiting."
+read -p "Enter full path of the log directory to monitor: " LOG_DIRECTORY
+
+if [ ! -d "$LOG_DIRECTORY" ]; then
+    echo "Directory does not exist. Exiting."
     exit 1
 fi
 
-echo "Enter destination (IP:PORT or SCP path). Leave blank to save locally:"
-read DESTINATION
+read -p "Enter destination path or URL (Leave blank to save locally): " DESTINATION
 
-PYTHON_PATH=$(which python3)
+echo "[Unit]
+Description=Log Collector Daemon Service
+After=network.target
 
-# Generate service file by replacing placeholders
-sudo sed \
-    -e "s|__PYTHON_PATH__|$PYTHON_PATH|" \
-    -e "s|__SCRIPT_PATH__|$REPO_PATH/log_collector_daemon.py|" \
-    -e "s|__LOG_DIRECTORY__|$LOG_DIR|" \
-    -e "s|__DESTINATION__|$DESTINATION|" \
-    $SERVICE_TEMPLATE | sudo tee $SERVICE_FILE > /dev/null
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 $SCRIPT_PATH $LOG_DIRECTORY $DESTINATION
+Restart=on-failure
 
-# Reload systemd and enable service
+[Install]
+WantedBy=multi-user.target" | sudo tee $SERVICE_FILE > /dev/null
+
 sudo systemctl daemon-reload
-sudo systemctl enable logcollector.service
-sudo systemctl restart logcollector.service
+sudo systemctl enable $SERVICE_NAME
+sudo systemctl start $SERVICE_NAME
 
 echo "Service installed and started successfully!"
