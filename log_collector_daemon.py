@@ -19,37 +19,35 @@ class LogCollectorDaemon:
         self.api_url = api_url
         self.initial_lines = initial_lines
         self.last_processed_time = None
+        self.first_run = True
         
-        # Ensure save directory exists
         os.makedirs(save_dir, exist_ok=True)
         self.output_file = os.path.join(save_dir, "latest_logs.tar.gz")
-        self.first_run = True
+        logger.info(f"Initialized with log_file_path={log_file_path}, save_dir={save_dir}, api_url={api_url}")
 
     def parse_log_timestamp(self, line):
-        """Parse timestamp from log line, supporting both formats"""
         try:
-            # Try ISO format (e.g., 2025-07-27 22:41:18.533 +05:00)
             if line.startswith('20'):
-                log_time_str = line[:26]  # Up to the first space after time
+                log_time_str = line[:26]
                 return datetime.strptime(log_time_str, '%Y-%m-%d %H:%M:%S.%f %z')
-            # Try syslog format (e.g., Jul 27 22:41:17)
             else:
-                log_time_str = line[:15]  # Up to the first space after time
+                log_time_str = line[:15]
                 return datetime.strptime(log_time_str, '%b %d %H:%M:%S')
         except (ValueError, IndexError):
+            logger.warning(f"Failed to parse timestamp in line: {line[:50]}...")
             return None
 
     def get_initial_logs(self):
-        """Read last N lines on first run"""
         try:
             with open(self.log_file_path, 'r') as f:
-                return tailer.tail(f, self.initial_lines)
+                logs = tailer.tail(f, self.initial_lines)
+                logger.info(f"Read {len(logs)} initial logs")
+                return logs
         except Exception as e:
             logger.error(f"Error reading initial logs: {e}")
             return []
 
     def get_logs_last_minute(self):
-        """Read logs generated in the last minute"""
         current_time = datetime.now()
         one_minute_ago = current_time - timedelta(minutes=1)
         
@@ -62,11 +60,13 @@ class LogCollectorDaemon:
         
         logs = []
         try:
+            # Use tail to read only recent lines, reducing memory usage
             with open(self.log_file_path, 'r') as f:
-                for line in f:
+                for line in tailer.follow(f, delay=0.1):
                     log_time = self.parse_log_timestamp(line)
-                    if log_time and self.last_processed_time < log_time <= current_time:
+                    if log_time and one_minute_ago <= log_time <= current_time:
                         logs.append(line)
+            logger.info(f"Collected {len(logs)} logs from last minute at {current_time}")
             self.last_processed_time = current_time
             return logs
         except Exception as e:
@@ -74,13 +74,11 @@ class LogCollectorDaemon:
             return []
 
     def create_tar_gz(self, logs):
-        """Create compressed tar.gz file from logs, overwriting existing file"""
         try:
-            # Remove old file if exists
             if os.path.exists(self.output_file):
                 os.remove(self.output_file)
+                logger.info(f"Removed old {self.output_file}")
 
-            # Write logs to temporary file and compress
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.log') as temp_file:
                 temp_file.write(''.join(logs))
                 temp_file_path = temp_file.name
@@ -89,12 +87,12 @@ class LogCollectorDaemon:
                 tar.add(temp_file_path, arcname="logs.log")
             
             os.remove(temp_file_path)
-            logger.info(f"Created tar.gz file at {self.output_file} with size {os.path.getsize(self.output_file)} bytes")
+            file_size = os.path.getsize(self.output_file)
+            logger.info(f"Created tar.gz file at {self.output_file} with size {file_size} bytes at {datetime.now()}")
         except Exception as e:
             logger.error(f"Error creating tar.gz: {e}")
 
     def send_to_api(self):
-        """Send compressed file to API endpoint"""
         if not self.api_url:
             return
         
@@ -110,31 +108,20 @@ class LogCollectorDaemon:
             logger.error(f"Error sending to API: {e}")
 
     def run(self):
-        """Main daemon loop"""
         logger.info("Starting Log Collector Daemon")
         while True:
             try:
-                # Get logs
                 logs = self.get_logs_last_minute()
-                
                 if logs:
-                    # Create compressed file
                     self.create_tar_gz(logs)
-                    
-                    # Send to API if URL is provided
                     if self.api_url:
                         self.send_to_api()
                 else:
-                    logger.info("No new logs found")
-                
-                # Wait for 1 minute
+                    logger.info(f"No new logs found at {datetime.now()}")
                 time.sleep(60)
-            except KeyboardInterrupt:
-                logger.info("Shutting down Log Collector Daemon")
-                break
             except Exception as e:
-                logger.error(f"Daemon error: {e}")
-                time.sleep(60)  # Continue running even on errors
+                logger.error(f"Daemon error: {e} at {datetime.now()}")
+                time.sleep(60)
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
