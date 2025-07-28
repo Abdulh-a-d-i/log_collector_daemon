@@ -2,71 +2,57 @@ import os
 import sys
 import time
 import tarfile
-import subprocess
-import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
-def compress_logs(log_dir, output_dir):
-    archive_name = os.path.join(output_dir, "latest_logs.tar.gz")
+def collect_and_compress_logs(log_directory, destination):
+    now = datetime.now()
+    one_minute_ago = now - timedelta(minutes=1)
 
+    logs_to_compress = []
 
-    with tarfile.open(archive_name, "w:gz") as tar:
-        tar.add(log_dir, arcname=os.path.basename(log_dir))
-    print(f"Compressed logs to {archive_name}")
-    return archive_name
+    for root, dirs, files in os.walk(log_directory):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if os.path.isfile(file_path):
+                mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
+                if mtime >= one_minute_ago:
+                    logs_to_compress.append(file_path)
 
-def send_via_scp(archive_path, destination):
-    scp_command = [
-        "scp", archive_path,
-        destination
-    ]
-    result = subprocess.run(scp_command, capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"Successfully sent {archive_path} via SCP")
-        os.remove(archive_path)
+    if not logs_to_compress:
+        print("No logs to compress.")
+        return
+
+    tar_path = "/tmp/latest_logs.tar.gz"
+    with tarfile.open(tar_path, "w:gz") as tar:
+        for log_file in logs_to_compress:
+            tar.add(log_file, arcname=os.path.basename(log_file))
+
+    print(f"Compressed logs saved to {tar_path}")
+
+    if destination and destination != " ":
+        # You can later add code to send to ElasticSearch or remote location here.
+        print(f"Sending logs to {destination} (Feature Placeholder)")
     else:
-        print(f"Failed to send {archive_path} via SCP: {result.stderr}")
+        print("No destination provided. Logs saved locally.")
 
-def send_via_http(archive_path, destination_url):
-    try:
-        with open(archive_path, 'rb') as f:
-            files = {'file': (os.path.basename(archive_path), f)}
-            response = requests.post(destination_url, files=files)
-        if response.status_code == 200:
-            print(f"Successfully sent {archive_path} via HTTP POST to {destination_url}")
-            os.remove(archive_path)
-        else:
-            print(f"Failed HTTP POST. Status: {response.status_code} Response: {response.text}")
-    except Exception as e:
-        print(f"Error sending via HTTP: {e}")
-
-def daemon(log_dir, destination):
+def daemon(log_directory, destination):
     while True:
-        try:
-            archive = compress_logs(log_dir, "/tmp")
-
-            # ======== DESTINATION HANDLING SECTION (EDIT LATER) ========
-            if destination == "":
-                print(f"No destination provided. Saved {archive} locally.")
-            elif ":" in destination and not destination.startswith("scp://"):
-                # Example: localhost:8080 (Send via HTTP POST)
-                dest_url = f"http://{destination}/upload"
-                send_via_http(archive, dest_url)
-            else:
-                # Example: user@remote:/path/to/dir/ (Send via SCP)
-                send_via_scp(archive, destination)
-            # ===========================================================
-        except Exception as e:
-            print(f"Error: {e}")
-        time.sleep(60)  # Sleep for 1 minute
+        collect_and_compress_logs(log_directory, destination)
+        time.sleep(60)
 
 if __name__ == "__main__":
-    log_directory = input("Enter the log directory path: ").strip()
+    if len(sys.argv) < 2:
+        print("Usage: python3 log_collector_daemon.py <log_directory> [destination]")
+        sys.exit(1)
+
+    log_directory = sys.argv[1]
     if not os.path.isdir(log_directory):
         print("Invalid directory. Exiting.")
         sys.exit(1)
 
     destination = sys.argv[2] if len(sys.argv) > 2 else ""
 
-    print("Running as daemon. Press Ctrl+C to stop.")
+    print(f"Monitoring logs in {log_directory}")
+    print(f"Destination: {destination if destination else 'Local Storage'}")
+
     daemon(log_directory, destination)
