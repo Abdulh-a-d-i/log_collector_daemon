@@ -7,8 +7,8 @@ SERVICE_FILE="/etc/systemd/system/logcollector.service"
 echo "Enter full path of the log directory to monitor:"
 read LOG_DIR
 
-if [ ! -d "$LOG_DIR" ]; then
-    echo "Directory does not exist. Exiting."
+if [ ! -e "$LOG_DIR" ]; then
+    echo "Path does not exist. Exiting."
     exit 1
 fi
 
