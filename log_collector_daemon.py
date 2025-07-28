@@ -4,60 +4,46 @@ import time
 import tarfile
 from datetime import datetime, timedelta
 
-def collect_and_compress_logs(log_directory, destination):
-    now = datetime.now()
-    one_minute_ago = now - timedelta(minutes=1)
+def collect_logs(path, destination):
+    current_time = datetime.now()
+    cutoff_time = current_time - timedelta(minutes=1)
+    output_file = "/tmp/latest_logs.tar.gz"
 
-    logs_to_compress = []
+    with tarfile.open(output_file, "w:gz") as tar:
+        if os.path.isdir(path):
+            for root, dirs, files in os.walk(path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    if datetime.fromtimestamp(os.path.getmtime(file_path)) > cutoff_time:
+                        tar.add(file_path, arcname=os.path.relpath(file_path, path))
+        elif os.path.isfile(path):
+            if datetime.fromtimestamp(os.path.getmtime(path)) > cutoff_time:
+                tar.add(path, arcname=os.path.basename(path))
 
-    for root, dirs, files in os.walk(log_directory):
-        for file in files:
-            file_path = os.path.join(root, file)
-            if os.path.isfile(file_path):
-                mtime = datetime.fromtimestamp(os.path.getmtime(file_path))
-                if mtime >= one_minute_ago:
-                    logs_to_compress.append(file_path)
-
-    if not logs_to_compress:
-        print("No logs to compress.")
-        return
-
-    tar_path = "/tmp/latest_logs.tar.gz"
-    with tarfile.open(tar_path, "w:gz") as tar:
-        for log_file in logs_to_compress:
-            tar.add(log_file, arcname=os.path.basename(log_file))
-
-    print(f"Compressed logs saved to {tar_path}")
-
-    if destination and destination != " ":
-        # You can later add code to send to ElasticSearch or remote location here.
-        print(f"Sending logs to {destination} (Feature Placeholder)")
+    if destination:
+        print(f"Simulating sending {output_file} to {destination}")
+        # TODO: Implement real sending logic here (HTTP POST etc.)
     else:
-        print("No destination provided. Logs saved locally.")
+        print(f"Logs compressed and saved locally at {output_file}")
 
-def daemon(log_directory, destination):
+def daemon(path, destination):
     while True:
-        collect_and_compress_logs(log_directory, destination)
+        collect_logs(path, destination)
         time.sleep(60)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 log_collector_daemon.py <log_directory> [destination]")
+        print("Usage: python3 log_collector_daemon.py <path_to_monitor> [destination]")
         sys.exit(1)
 
-path_to_monitor = sys.argv[1] if len(sys.argv) > 1 else ""
-destination = sys.argv[2] if len(sys.argv) > 2 else ""
-
-if not os.path.exists(path_to_monitor):
-    print("Invalid path. Exiting.")
-    sys.exit(1)
-
-is_directory = os.path.isdir(path_to_monitor)
-print(f"Monitoring {'directory' if is_directory else 'file'}: {path_to_monitor}")
-
+    path_to_monitor = sys.argv[1]
     destination = sys.argv[2] if len(sys.argv) > 2 else ""
 
-    print(f"Monitoring logs in {log_directory}")
-    print(f"Destination: {destination if destination else 'Local Storage'}")
+    if not os.path.exists(path_to_monitor):
+        print("Invalid path. Exiting.")
+        sys.exit(1)
 
-    daemon(log_directory, destination)
+    is_directory = os.path.isdir(path_to_monitor)
+    print(f"Monitoring {'directory' if is_directory else 'file'}: {path_to_monitor}")
+
+    daemon(path_to_monitor, destination)
