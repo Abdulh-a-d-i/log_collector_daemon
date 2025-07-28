@@ -1,60 +1,123 @@
-# Python Daemon Script (log_collector_daemon.py)
-
 import os
 import sys
 import time
 import tarfile
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+import logging
 
-LOG_FILE_PATH = "/var/log/syslog"
-DESTINATION_API = ""  # Will be set from command-line argument
-LOCAL_SAVE_PATH = "/tmp/latest_logs.tar.gz"
-SEND_INTERVAL = 60  # 1 minute
-LOG_LIMIT = 100  # Number of logs to keep
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
+class LogCollectorDaemon:
+    def __init__(self, log_file_path, save_dir, api_url=None):
+        self.log_file_path = log_file_path
+        self.save_dir = save_dir
+        self.api_url = api_url
+        self.last_processed_time = None
+        
+        # Ensure save directory exists
+        os.makedirs(save_dir, exist_ok=True)
+        self.output_file = os.path.join(save_dir, "latest_logs.tar.gz")
 
-def read_last_n_logs(file_path, n):
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-    return lines[-n:]
+    def get_logs_last_minute(self):
+        """Read logs generated in the last minute"""
+        current_time = datetime.now()
+        one_minute_ago = current_time - timedelta(minutes=1)
+        
+        if not self.last_processed_time:
+            self.last_processed_time = one_minute_ago
+        
+        logs = []
+        try:
+            with open(self.log_file_path, 'r') as f:
+                for line in f:
+                    try:
+                        # Assuming log lines start with timestamp in format: YYYY-MM-DD HH:MM:SS
+                        log_time_str = line[:19]
+                        log_time = datetime.strptime(log_time_str, '%Y-%m-%d %H:%M:%S')
+                        if self.last_processed_time < log_time <= current_time:
+                            logs.append(line)
+                    except (ValueError, IndexError):
+                        continue
+            self.last_processed_time = current_time
+            return logs
+        except Exception as e:
+            logger.error(f"Error reading logs: {e}")
+            return []
 
+    def create_tar_gz(self, logs):
+        """Create compressed tar.gz file from logs, overwriting existing file"""
+        try:
+            # Remove old file if exists
+            if os.path.exists(self.output_file):
+                os.remove(self.output_file)
 
-def save_logs_to_file(log_lines, output_file):
-    with open('/tmp/temp_logs.txt', 'w') as f:
-        f.writelines(log_lines)
+            # Write logs to temporary file and compress
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.log') as temp_file:
+                temp_file.write(''.join(logs))
+                temp_file_path = temp_file.name
 
-    with tarfile.open(output_file, 'w:gz') as tar:
-        tar.add('/tmp/temp_logs.txt', arcname='logs.txt')
+            with tarfile.open(self.output_file, "w:gz") as tar:
+                tar.add(temp_file_path, arcname="logs.log")
+            
+            os.remove(temp_file_path)
+            logger.info(f"Created tar.gz file at {self.output_file} with size {os.path.getsize(self.output_file)} bytes")
+        except Exception as e:
+            logger.error(f"Error creating tar.gz: {e}")
 
-    os.remove('/tmp/temp_logs.txt')
+    def send_to_api(self):
+        """Send compressed file to API endpoint"""
+        if not self.api_url:
+            return
+        
+        try:
+            with open(self.output_file, 'rb') as f:
+                files = {'file': ('latest_logs.tar.gz', f)}
+                response = requests.post(self.api_url, files=files, timeout=10)
+                if response.status_code == 200:
+                    logger.info("Successfully sent logs to API")
+                else:
+                    logger.error(f"API request failed with status {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error sending to API: {e}")
 
-
-def send_file_to_server(file_path, destination):
-    try:
-        with open(file_path, 'rb') as f:
-            files = {'file': ("latest_logs.tar.gz", f)}
-            response = requests.post(destination, files=files)
-            print(f"Sent to {destination}, Status Code: {response.status_code}")
-    except Exception as e:
-        print(f"Failed to send file: {e}")
-
-
-def daemon_loop():
-    while True:
-        logs = read_last_n_logs(LOG_FILE_PATH, LOG_LIMIT)
-        save_logs_to_file(logs, LOCAL_SAVE_PATH)
-        print(f"Updated local log archive: {LOCAL_SAVE_PATH}")
-
-        if DESTINATION_API:
-            send_file_to_server(LOCAL_SAVE_PATH, DESTINATION_API)
-
-        time.sleep(SEND_INTERVAL)
-
+    def run(self):
+        """Main daemon loop"""
+        logger.info("Starting Log Collector Daemon")
+        while True:
+            try:
+                # Get logs from last minute
+                logs = self.get_logs_last_minute()
+                
+                if logs:
+                    # Create compressed file
+                    self.create_tar_gz(logs)
+                    
+                    # Send to API if URL is provided
+                    if self.api_url:
+                        self.send_to_api()
+                else:
+                    logger.info("No new logs found in the last minute")
+                
+                # Wait for 1 minute
+                time.sleep(60)
+            except KeyboardInterrupt:
+                logger.info("Shutting down Log Collector Daemon")
+                break
+            except Exception as e:
+                logger.error(f"Daemon error: {e}")
+                time.sleep(60)  # Continue running even on errors
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        DESTINATION_API = sys.argv[1]
-
-    print("Log Collector Daemon Started...")
-    daemon_loop()
+    if len(sys.argv) < 3:
+        print("Usage: python log_collector_daemon.py <log_file_path> <save_dir> [api_url]")
+        sys.exit(1)
+    
+    log_file_path = sys.argv[1]
+    save_dir = sys.argv[2]
+    api_url = sys.argv[3] if len(sys.argv) > 3 else None
+    
+    daemon = LogCollectorDaemon(log_file_path, save_dir, api_url)
+    daemon.run()
