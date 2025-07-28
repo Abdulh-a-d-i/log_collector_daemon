@@ -45,10 +45,15 @@ if __name__ == "__main__":
         print("Usage: python3 log_collector_daemon.py <log_directory> [destination]")
         sys.exit(1)
 
-    log_directory = sys.argv[1]
-    if not os.path.isdir(log_directory):
-        print("Invalid directory. Exiting.")
-        sys.exit(1)
+path_to_monitor = sys.argv[1] if len(sys.argv) > 1 else ""
+destination = sys.argv[2] if len(sys.argv) > 2 else ""
+
+if not os.path.exists(path_to_monitor):
+    print("Invalid path. Exiting.")
+    sys.exit(1)
+
+is_directory = os.path.isdir(path_to_monitor)
+print(f"Monitoring {'directory' if is_directory else 'file'}: {path_to_monitor}")
 
     destination = sys.argv[2] if len(sys.argv) > 2 else ""
 
