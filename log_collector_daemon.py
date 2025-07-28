@@ -4,27 +4,58 @@ import time
 import tarfile
 import requests
 from datetime import datetime, timedelta
+import tailer
 import logging
+import tempfile
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class LogCollectorDaemon:
-    def __init__(self, log_file_path, save_dir, api_url=None):
+    def __init__(self, log_file_path, save_dir, api_url=None, initial_lines=100):
         self.log_file_path = log_file_path
         self.save_dir = save_dir
         self.api_url = api_url
+        self.initial_lines = initial_lines
         self.last_processed_time = None
         
         # Ensure save directory exists
         os.makedirs(save_dir, exist_ok=True)
         self.output_file = os.path.join(save_dir, "latest_logs.tar.gz")
+        self.first_run = True
+
+    def parse_log_timestamp(self, line):
+        """Parse timestamp from log line, supporting both formats"""
+        try:
+            # Try ISO format (e.g., 2025-07-27 22:41:18.533 +05:00)
+            if line.startswith('20'):
+                log_time_str = line[:26]  # Up to the first space after time
+                return datetime.strptime(log_time_str, '%Y-%m-%d %H:%M:%S.%f %z')
+            # Try syslog format (e.g., Jul 27 22:41:17)
+            else:
+                log_time_str = line[:15]  # Up to the first space after time
+                return datetime.strptime(log_time_str, '%b %d %H:%M:%S')
+        except (ValueError, IndexError):
+            return None
+
+    def get_initial_logs(self):
+        """Read last N lines on first run"""
+        try:
+            with open(self.log_file_path, 'r') as f:
+                return tailer.tail(f, self.initial_lines)
+        except Exception as e:
+            logger.error(f"Error reading initial logs: {e}")
+            return []
 
     def get_logs_last_minute(self):
         """Read logs generated in the last minute"""
         current_time = datetime.now()
         one_minute_ago = current_time - timedelta(minutes=1)
+        
+        if self.first_run:
+            self.first_run = False
+            return self.get_initial_logs()
         
         if not self.last_processed_time:
             self.last_processed_time = one_minute_ago
@@ -33,14 +64,9 @@ class LogCollectorDaemon:
         try:
             with open(self.log_file_path, 'r') as f:
                 for line in f:
-                    try:
-                        # Assuming log lines start with timestamp in format: YYYY-MM-DD HH:MM:SS
-                        log_time_str = line[:19]
-                        log_time = datetime.strptime(log_time_str, '%Y-%m-%d %H:%M:%S')
-                        if self.last_processed_time < log_time <= current_time:
-                            logs.append(line)
-                    except (ValueError, IndexError):
-                        continue
+                    log_time = self.parse_log_timestamp(line)
+                    if log_time and self.last_processed_time < log_time <= current_time:
+                        logs.append(line)
             self.last_processed_time = current_time
             return logs
         except Exception as e:
@@ -88,7 +114,7 @@ class LogCollectorDaemon:
         logger.info("Starting Log Collector Daemon")
         while True:
             try:
-                # Get logs from last minute
+                # Get logs
                 logs = self.get_logs_last_minute()
                 
                 if logs:
@@ -99,7 +125,7 @@ class LogCollectorDaemon:
                     if self.api_url:
                         self.send_to_api()
                 else:
-                    logger.info("No new logs found in the last minute")
+                    logger.info("No new logs found")
                 
                 # Wait for 1 minute
                 time.sleep(60)
