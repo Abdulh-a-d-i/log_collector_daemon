@@ -66,7 +66,7 @@ if __name__ == "__main__":
         print("Invalid directory. Exiting.")
         sys.exit(1)
 
-    destination = input("Enter destination (leave blank to save locally): ").strip()
+   destination = sys.argv[2] if len(sys.argv) > 2 else ""
 
     print("Running as daemon. Press Ctrl+C to stop.")
     daemon(log_directory, destination)
