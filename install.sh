@@ -47,11 +47,11 @@ if [ ! -f "$TEMPLATE_FILE" ]; then
     exit 1
 fi
 
-# Replace placeholders in service template
+# Replace placeholders in service template with quoted paths to handle spaces
 if [ -z "$API_URL" ]; then
-    EXEC_START="$PYTHON_PATH $SCRIPT_PATH $LOG_FILE_PATH $SAVE_DIR"
+    EXEC_START="\"$PYTHON_PATH\" \"$SCRIPT_PATH\" \"$LOG_FILE_PATH\" \"$SAVE_DIR\""
 else
-    EXEC_START="$PYTHON_PATH $SCRIPT_PATH $LOG_FILE_PATH $SAVE_DIR $API_URL"
+    EXEC_START="\"$PYTHON_PATH\" \"$SCRIPT_PATH\" \"$LOG_FILE_PATH\" \"$SAVE_DIR\" \"$API_URL\""
 fi
 
 sed -e "s|{USER}|$CURRENT_USER|g" \
