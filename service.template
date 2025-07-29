@@ -4,11 +4,10 @@ After=network.target
 
 [Service]
 User={USER}
-ExecStart={EXEC_START}
+WorkingDirectory={PROJECT_DIR}
+ExecStart={PROJECT_DIR}/venv/bin/python {PROJECT_DIR}/log_collector_daemon.py {LOG_FILE_PATH} {SAVE_DIR} {API_URL}
 Restart=always
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
