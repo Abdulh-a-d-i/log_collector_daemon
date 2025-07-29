@@ -1,83 +1,51 @@
 #!/bin/bash
 
-# Function to validate inputs
-validate_input() {
-    local input=$1
-    local description=$2
-    if [ -z "$input" ]; then
-        echo "Error: $description cannot be empty"
-        exit 1
-    fi
-}
+set -e
 
-# Get user inputs
-read -p "Enter log file path (e.g., /var/log/syslog): " LOG_FILE_PATH
-validate_input "$LOG_FILE_PATH" "Log file path"
+# Step 1: Create Virtual Environment
+echo "Creating Python Virtual Environment..."
+python3 -m venv venv
 
-read -p "Enter local save directory (e.g., /home/user/logs): " SAVE_DIR
-validate_input "$SAVE_DIR" "Save directory"
-if [[ "$SAVE_DIR" == *"/log_collector_deamon" ]]; then
-    echo "Did you mean /home/log_collector_daemon? (y/n)"
-    read -r confirm
-    if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
-        SAVE_DIR="/home/log_collector_daemon"
-        echo "Corrected to $SAVE_DIR"
-    fi
-fi
+# Step 2: Activate Virtual Environment
+echo "Activating Virtual Environment..."
+source venv/bin/activate
 
-read -p "Enter API endpoint URL (optional, press Enter to skip): " API_URL
+# Step 3: Install Required Python Packages
+echo "Installing required Python packages..."
+pip install --upgrade pip
+pip install tailer requests
 
-# Get current user and Python path
-CURRENT_USER=$(whoami)
-PYTHON_PATH=$(which python3)
-SCRIPT_PATH=$(realpath "$PWD/log_collector_daemon.py")
-
-# Validate Python and script existence
-if [ ! -f "$PYTHON_PATH" ]; then
-    echo "Error: Python3 not found"
+# Step 4: Ask User Inputs
+read -p "Enter full path of the log file to monitor: " LOG_FILE_PATH
+if [ ! -f "$LOG_FILE_PATH" ]; then
+    echo "Log file does not exist. Exiting."
     exit 1
 fi
 
-if [ -f "$SCRIPT_PATH" ]; then
-    echo "Using script path: $SCRIPT_PATH"
-else
-    echo "Error: log_collector_daemon.py not found at $SCRIPT_PATH"
-    exit 1
-fi
-
-# Create save directory if it doesn't exist
+read -p "Enter full path of the directory to save logs: " SAVE_DIR
 mkdir -p "$SAVE_DIR"
 
-# Create service file from template
-SERVICE_FILE="/etc/systemd/system/logcollector.service"
-TEMPLATE_FILE="$(dirname "$0")/service.template"
+read -p "Enter API URL to send logs (leave blank if not sending): " API_URL
 
-if [ ! -f "$TEMPLATE_FILE" ]; then
-    echo "Error: service.template not found"
-    exit 1
-fi
+# Step 5: Prepare systemd service file
+SERVICE_FILE="logcollector.service"
+cp service.template $SERVICE_FILE
 
-# Replace placeholders in service template with quoted paths to handle spaces
-if [ -z "$API_URL" ]; then
-    EXEC_START="\"$PYTHON_PATH\" \"$SCRIPT_PATH\" \"$LOG_FILE_PATH\" \"$SAVE_DIR\""
-else
-    EXEC_START="\"$PYTHON_PATH\" \"$SCRIPT_PATH\" \"$LOG_FILE_PATH\" \"$SAVE_DIR\" \"$API_URL\""
-fi
+# Replace placeholders in service file
+sed -i "s|{LOG_FILE_PATH}|$LOG_FILE_PATH|g" $SERVICE_FILE
+sed -i "s|{SAVE_DIR}|$SAVE_DIR|g" $SERVICE_FILE
+sed -i "s|{API_URL}|$API_URL|g" $SERVICE_FILE
+sed -i "s|{PROJECT_DIR}|$(pwd)|g" $SERVICE_FILE
+sed -i "s|{USER}|$USER|g" $SERVICE_FILE
+sed -i "s|{PROJECT_DIR}|$(pwd)|g" $SERVICE_FILE
 
-sed -e "s|{USER}|$CURRENT_USER|g" \
-    -e "s|{PYTHON_PATH}|$PYTHON_PATH|g" \
-    -e "s|{SCRIPT_PATH}|$SCRIPT_PATH|g" \
-    -e "s|{EXEC_START}|$EXEC_START|g" \
-    "$TEMPLATE_FILE" > "$SERVICE_FILE"
+# Step 6: Install systemd service
+sudo mv $SERVICE_FILE /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable logcollector.service
 
-# Set permissions
-chmod 644 "$SERVICE_FILE"
+# Step 7: Start the Service
+sudo systemctl restart logcollector.service
 
-# Reload systemd and enable service
-systemctl daemon-reload
-systemctl enable logcollector.service
-systemctl start logcollector.service
-
-echo "Log Collector Daemon installed and started successfully!"
-echo "Service status:"
-systemctl status logcollector.service
+echo "Installation completed successfully!"
+echo "Log Collector Daemon is now running in background."
