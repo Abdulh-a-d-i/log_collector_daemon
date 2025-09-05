@@ -4,7 +4,7 @@
 import os
 import sys
 import time
-import tarfile
+import gzip
 import logging
 import tempfile
 import argparse
@@ -102,7 +102,7 @@ class LogCollectorDaemon:
         self.rabbitmq_queue = rabbitmq_queue
 
         os.makedirs(self.save_dir, exist_ok=True)
-        self.output_file = os.path.join(self.save_dir, "latest_logs.tar.gz")
+        self.output_file = os.path.join(self.save_dir, "latest_logs.log.gz")
 
         logger.info(
             "Initialized: log_file=%s save_dir=%s interval=%ss tail_lines=%s api_url=%s rabbitmq_url=%s queue=%s",
@@ -145,25 +145,21 @@ class LogCollectorDaemon:
             logger.error("Error reading logs: %s", e)
             return []
 
-    def _create_tar_gz(self, lines: list[str]):
-        """Create tar.gz containing a single file logs.log with collected lines."""
+    def _create_gz(self, lines: list[str]):
+        """Create .gz file containing the collected log lines."""
         try:
             if os.path.exists(self.output_file):
                 os.remove(self.output_file)
 
-            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".log") as tf:
-                tf.write("".join(lines))
-                temp_log_path = tf.name
+            # Write directly to gzip file
+            with gzip.open(self.output_file, 'wt', encoding='utf-8') as gz_file:
+                gz_file.write("".join(lines))
 
-            with tarfile.open(self.output_file, "w:gz") as tar:
-                tar.add(temp_log_path, arcname="logs.log")
-
-            os.remove(temp_log_path)
             size = os.path.getsize(self.output_file)
             logger.info("Created %s (%d bytes)", self.output_file, size)
             return True
         except Exception as e:
-            logger.error("Error creating tar.gz: %s", e)
+            logger.error("Error creating .gz file: %s", e)
             return False
 
     # --------- Publishers ----------
@@ -173,7 +169,7 @@ class LogCollectorDaemon:
 
         try:
             with open(self.output_file, "rb") as f:
-                files = {"file": ("latest_logs.tar.gz", f, "application/gzip")}
+                files = {"file": ("latest_logs.log.gz", f, "application/gzip")}
                 resp = requests.post(self.api_url, files=files, timeout=20)
             if 200 <= resp.status_code < 300:
                 logger.info("HTTP API: sent successfully (status %s)", resp.status_code)
@@ -206,7 +202,7 @@ class LogCollectorDaemon:
                 delivery_mode=2,  # persistent
                 content_type="application/gzip",
                 content_encoding="gzip",
-                headers={"filename": "latest_logs.tar.gz", "created_at": datetime.utcnow().isoformat() + "Z"},
+                headers={"filename": "latest_logs.gz", "created_at": datetime.utcnow().isoformat() + "Z"},
             )
 
             ch.basic_publish(exchange="", routing_key=self.rabbitmq_queue, body=body, properties=props)
@@ -225,7 +221,7 @@ class LogCollectorDaemon:
             try:
                 lines = self._collect_recent_logs()
                 if lines:
-                    if self._create_tar_gz(lines):
+                    if self._create_gz(lines):
                         # Prefer RabbitMQ; if not set or fails, try HTTP
                         sent = False
                         if self.rabbitmq_url:
@@ -246,7 +242,7 @@ class LogCollectorDaemon:
 # ----------------------- CLI -----------------------
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Collect recent logs, bundle to tar.gz, and publish to RabbitMQ and/or HTTP."
+        description="Collect recent logs, compress to .gz, and publish to RabbitMQ and/or HTTP."
     )
 
     # backward-compatible positional (optional)
@@ -255,14 +251,14 @@ def parse_args():
 
     # preferred named args
     p.add_argument("--log-file", dest="log_file", help="Log file to monitor")
-    p.add_argument("--save-dir", dest="save_dir", help="Directory to write bundles")
+    p.add_argument("--save-dir", dest="save_dir", help="Directory to write compressed files")
     p.add_argument("--interval", type=int, default=60, help="Interval seconds (default: 60)")
     p.add_argument("--tail-lines", type=int, default=200, help="Tail N lines to inspect each cycle (default: 200)")
 
     # transports
     p.add_argument("--rabbitmq-url", help="amqp[s]://user:pass@host:port/vhost")
     p.add_argument("--rabbitmq-queue", default="logs", help="RabbitMQ queue name (default: logs)")
-    p.add_argument("--api-url", help="Optional HTTP endpoint to POST the tar.gz")
+    p.add_argument("--api-url", help="Optional HTTP endpoint to POST the .gz file")
 
     args = p.parse_args()
 
