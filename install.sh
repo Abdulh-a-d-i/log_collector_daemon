@@ -40,8 +40,7 @@ if [[ ! -d "$PROJECT_DIR/venv" ]]; then
 fi
 source "$PROJECT_DIR/venv/bin/activate"
 pip install --upgrade pip
-pip install requests
-
+pip install requests tailer
 # -------- Inputs --------
 echo "[3/5] Gathering configuration..."
 read -rp "Full path of the log file to monitor: " LOG_FILE_PATH
