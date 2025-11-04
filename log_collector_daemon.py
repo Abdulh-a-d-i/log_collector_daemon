@@ -1,206 +1,265 @@
 #!/usr/bin/env python3
 # log_collector_daemon.py
-import asyncio
-import json
+import threading
+import time
 import os
 import re
-import datetime
+import json
 import argparse
+import socket
+import platform
+import uuid
+from datetime import datetime
+from http import HTTPStatus
+import requests
+from flask import Flask, request, jsonify
+import subprocess
 import sys
-from websockets.server import serve
-import asyncio.subprocess as asp
 
-DEFAULT_PORT = 8575
-WS_PATH = "/logs"
+# -------- CONFIGURATION & defaults --------
+DEFAULT_WS_PORT = int(os.getenv("LIVE_WS_PORT", "8755"))  # port where livelogs.py will host WS
+DEFAULT_CONTROL_PORT = int(os.getenv("CONTROL_PORT", "8754"))  # this daemon's control HTTP port
+ERROR_KEYWORDS = [
+    "emerg", "emergency", "alert", "crit", "critical",
+    "err", "error", "fail", "failed", "failure", "panic", "fatal"
+]
 
-class LogCollectorDaemon:
-    def __init__(self, log_file, port=DEFAULT_PORT, node_id=None, tail_interval=1):
-        self.log_file = log_file
-        self.port = port
-        self.node_id = node_id or os.uname().nodename
-        self.tail_interval = tail_interval
-        self.clients = set()
-        self.livelogs_proc = None
-        self.livelogs_lock = asyncio.Lock()
-        # regex for error keywords
-        self.pattern = re.compile(r"(emerg|emergency|alert|crit|critical|err|error)", re.IGNORECASE)
+# -------- helpers --------
+def get_node_id():
+    try:
+        # prefer an IP if possible
+        ip = socket.gethostbyname(socket.gethostname())
+        return ip
+    except Exception:
+        return socket.gethostname()
 
-    async def broadcast(self, message: dict):
-        if not self.clients:
-            return
-        payload = json.dumps(message)
-        # send concurrently, but catch per-client exceptions
-        coros = []
-        dead = []
-        for ws in list(self.clients):
-            coros.append(self._safe_send(ws, payload, dead))
-        if coros:
-            await asyncio.gather(*coros)
-        # cleanup dead clients
-        for d in dead:
-            self.clients.discard(d)
+def detect_severity(line: str) -> str:
+    text = line.lower()
+    if any(k in text for k in ["panic", "fatal", "critical", "crit"]):
+        return "CRITICAL"
+    if any(k in text for k in ["fail", "failed", "failure"]):
+        return "FAILURE"
+    if any(k in text for k in ["err", "error"]):
+        return "ERROR"
+    if any(k in text for k in ["warn", "warning"]):
+        return "WARNING"
+    return "INFO"
 
-    async def _safe_send(self, ws, payload, dead_list):
+# Try to parse a timestamp from a common syslog-like prefix.
+# If parsing fails, return UTC now.
+SYSLOG_MONTHS = {m: i for i, m in enumerate(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], 1)}
+def parse_timestamp(line: str) -> str:
+    # Common syslog format: "Oct 11 22:14:15 hostname ..." (no year)
+    m = re.match(r"^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})", line)
+    if m:
+        mon, day, timepart = m.groups()
         try:
-            await ws.send(payload)
+            month = SYSLOG_MONTHS.get(mon, None)
+            if month:
+                now = datetime.utcnow()
+                year = now.year
+                dt = datetime.strptime(f"{year} {month} {day} {timepart}", "%Y %m %d %H:%M:%S")
+                # if date is in future (year edge), subtract one year
+                if dt > now:
+                    dt = dt.replace(year=year-1)
+                return dt.isoformat() + "Z"
         except Exception:
-            try:
-                await ws.close()
-            except:
-                pass
-            dead_list.append(ws)
+            pass
+    # RFC3339 / ISO-like anywhere in the line
+    m2 = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)", line)
+    if m2:
+        try:
+            return m2.group(1)
+        except:
+            pass
+    return datetime.utcnow().isoformat() + "Z"
 
-    async def error_monitor_loop(self):
-        """Continuously tail the log file for error keywords and broadcast them."""
-        # if file does not exist yet, wait until created
-        while not os.path.exists(self.log_file):
-            await asyncio.sleep(1)
+# -------- Daemon class --------
+class LogCollectorDaemon:
+    def __init__(self, log_file, api_url, ws_port=DEFAULT_WS_PORT, node_id=None, interval=1, tail_lines=200):
+        self.log_file = os.path.abspath(log_file)
+        self.api_url = api_url.rstrip("/") if api_url else None
+        self.ws_port = int(ws_port)
+        self.node_id = node_id or get_node_id()
+        self.interval = interval
+        self.tail_lines = tail_lines
+        self._stop_flag = threading.Event()
+        self._thread = None
+        self._live_proc = None  # subprocess for livelogs.py
+        self._live_lock = threading.Lock()
+
+        # compiled keyword regex for faster matching
+        kw = "|".join(re.escape(k) for k in ERROR_KEYWORDS)
+        self._err_re = re.compile(rf"\b({kw})\b", re.IGNORECASE)
+
+    def start(self):
+        # starts background thread for monitoring
+        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop_flag.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+        # ensure live proc stopped
+        self.stop_livelogs()
+
+    def _read_last_lines(self, filepath, lines=200):
+        try:
+            with open(filepath, "r", errors="ignore") as f:
+                return tail_lines_from_file(f, lines)
+        except Exception:
+            return []
+
+    def _monitor_loop(self):
+        # main loop: tail log file continuously and send matches via HTTP POST
+        # Wait until file exists; do not crash if missing.
+        while not os.path.exists(self.log_file) and not self._stop_flag.is_set():
+            time.sleep(1)
+        if self._stop_flag.is_set():
+            return
+
         try:
             with open(self.log_file, "r", errors="ignore") as f:
+                # go to EOF
                 f.seek(0, os.SEEK_END)
-                while True:
+                while not self._stop_flag.is_set():
                     line = f.readline()
                     if not line:
-                        await asyncio.sleep(self.tail_interval)
+                        time.sleep(self.interval)
                         continue
-                    if self.pattern.search(line):
-                        msg = {
-                            "type": "error_log",
+                    if self._err_re.search(line):
+                        severity = detect_severity(line)
+                        ts = parse_timestamp(line)
+                        payload = {
                             "node_id": self.node_id,
-                            "timestamp": datetime.datetime.utcnow().isoformat(),
-                            "log": line.rstrip("\n"),
+                            "timestamp": ts,
+                            "severity": severity,
+                            "log": line.rstrip("\n")
                         }
-                        await self.broadcast(msg)
-        except asyncio.CancelledError:
-            raise
+                        # best-effort post; don't crash daemon if fails
+                        if self.api_url:
+                            try:
+                                resp = requests.post(self.api_url, json=payload, timeout=5)
+                                # non-200 isn't fatal; log if needed
+                                if resp.status_code >= 400:
+                                    print(f"[daemon] POST to {self.api_url} returned {resp.status_code}")
+                            except Exception as e:
+                                print(f"[daemon] Error posting to API: {e}")
+                        else:
+                            # no API configured: just print locally (safe fallback)
+                            print(json.dumps(payload))
         except Exception as e:
-            # broadcast or log locally
-            print(f"[daemon] error_monitor_loop exception: {e}", file=sys.stderr)
+            print(f"[daemon] Monitor loop exception: {e}")
 
-    async def start_livelogs(self):
-        """Start livelogs.py subprocess and create a task to read its stdout."""
-        async with self.livelogs_lock:
-            if self.livelogs_proc and self.livelogs_proc.returncode is None:
-                return False  # already running
+    # ---------------- subprocess control ----------------
+    def start_livelogs(self):
+        with self._live_lock:
+            if self._live_proc and self._live_proc.poll() is None:
+                return False, "already_running"
             script = os.path.join(os.path.dirname(__file__), "livelogs.py")
             if not os.path.exists(script):
-                raise FileNotFoundError(f"livelogs.py not found at {script}")
-            # spawn subprocess
-            self.livelogs_proc = await asp.create_subprocess_exec(
-                sys.executable, script, self.log_file,
-                stdout=asp.PIPE,
-                stderr=asp.PIPE,
-                # on unix, subprocesses inherit signals; we will terminate gracefully
-            )
-            # start stdout reader task
-            asyncio.create_task(self._read_livelogs_output())
-            return True
-
-    async def stop_livelogs(self):
-        async with self.livelogs_lock:
-            if not self.livelogs_proc or self.livelogs_proc.returncode is not None:
-                self.livelogs_proc = None
-                return False
+                return False, "livelogs_missing"
+            cmd = [sys.executable, script, self.log_file, str(self.ws_port), self.node_id]
             try:
-                self.livelogs_proc.terminate()
-                await asyncio.wait_for(self.livelogs_proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                self.livelogs_proc.kill()
-                await self.livelogs_proc.wait()
-            finally:
-                self.livelogs_proc = None
-            return True
+                # spawn as detached process group
+                self._live_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
+                return True, str(self._live_proc.pid)
+            except Exception as e:
+                return False, f"spawn_error: {e}"
 
-    async def _read_livelogs_output(self):
-        proc = self.livelogs_proc
-        if not proc or not proc.stdout:
-            return
-        try:
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                text = line.decode(errors="ignore").rstrip("\n")
-                msg = {
-                    "type": "live_log",
-                    "node_id": self.node_id,
-                    "timestamp": datetime.datetime.utcnow().isoformat(),
-                    "log": text,
-                }
-                await self.broadcast(msg)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            print(f"[daemon] _read_livelogs_output exception: {e}", file=sys.stderr)
-
-    async def ws_handler(self, websocket, path):
-        """Handle a single WS connection. Validate path==WS_PATH."""
-        if path != WS_PATH:
-            await websocket.close(code=1008, reason="Invalid path")
-            return
-        self.clients.add(websocket)
-        try:
-            # send initial info
-            await websocket.send(json.dumps({
-                "type": "info",
-                "node_id": self.node_id,
-                "message": "connected",
-            }))
-
-            async for raw in websocket:
+    def stop_livelogs(self):
+        with self._live_lock:
+            if not self._live_proc or self._live_proc.poll() is not None:
+                self._live_proc = None
+                return False, "no_active_process"
+            try:
+                self._live_proc.terminate()
                 try:
-                    data = json.loads(raw)
-                except Exception:
-                    # ignore non-json messages
-                    continue
-                cmd = data.get("command")
-                if cmd == "start_live_logs":
-                    await self.start_livelogs()
-                    await websocket.send(json.dumps({"type":"control","status":"live_started"}))
-                elif cmd == "stop_live_logs":
-                    stopped = await self.stop_livelogs()
-                    await websocket.send(json.dumps({"type":"control","status":"live_stopped" if stopped else "no_live"}))
-                else:
-                    await websocket.send(json.dumps({"type":"control","status":"unknown_command"}))
-        except Exception as e:
-            # client disconnected or error
-            pass
-        finally:
-            try:
-                await websocket.close()
-            except:
-                pass
-            self.clients.discard(websocket)
+                    self._live_proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self._live_proc.kill()
+                    self._live_proc.wait(timeout=3)
+            except Exception as e:
+                return False, f"stop_error:{e}"
+            finally:
+                self._live_proc = None
+            return True, "stopped"
 
-    async def run(self):
-        print(f"[daemon] Starting WebSocket server on ws://0.0.0.0:{self.port}{WS_PATH}")
-        # start server
-        async with serve(self.ws_handler, "0.0.0.0", self.port):
-            # run error monitor forever
-            await self.error_monitor_loop()
+# tail helper (efficientish)
+def tail_lines_from_file(fobj, n):
+    # read from end backwards in blocks
+    # simple fallback: read whole file if small
+    try:
+        fobj.seek(0, os.SEEK_END)
+        filesize = fobj.tell()
+        blocksize = 1024
+        data = ""
+        while len(data.splitlines()) <= n and filesize > 0:
+            seekpos = max(0, filesize - blocksize)
+            fobj.seek(seekpos)
+            chunk = fobj.read(min(blocksize, filesize))
+            data = chunk + data
+            filesize = seekpos
+            if seekpos == 0:
+                break
+        return data.splitlines()[-n:]
+    except Exception:
+        # fallback to reading everything
+        fobj.seek(0)
+        return fobj.readlines()[-n:]
 
+# -------- Flask HTTP control app --------
+def make_app(daemon: LogCollectorDaemon):
+    app = Flask(__name__)
+
+    @app.route("/control", methods=["POST"])
+    def control():
+        data = request.get_json(force=True)
+        cmd = data.get("command")
+        if cmd == "start_livelogs":
+            ok, info = daemon.start_livelogs()
+            if ok:
+                return jsonify({"status": "started", "pid": info}), HTTPStatus.OK
+            else:
+                return jsonify({"status": "error", "detail": info}), HTTPStatus.BAD_REQUEST
+
+        if cmd == "stop_livelogs":
+            ok, info = daemon.stop_livelogs()
+            if ok:
+                return jsonify({"status": "stopped"}), HTTPStatus.OK
+            else:
+                return jsonify({"status": "error", "detail": info}), HTTPStatus.BAD_REQUEST
+
+        return jsonify({"status": "unknown_command"}), HTTPStatus.BAD_REQUEST
+
+    @app.route("/health", methods=["GET"])
+    def health():
+        return jsonify({"status":"ok", "node_id": daemon.node_id}), HTTPStatus.OK
+
+    return app
+
+# -------- CLI / Entrypoint --------
 def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--log-file", "-l", help="Path to log file")
-    parser.add_argument("--port", "-p", type=int, default=DEFAULT_PORT, help="WebSocket port")
-    parser.add_argument("--node-id", "-n", help="Node identifier (optional)")
-    args = parser.parse_args()
-    # decide log file: CLI -> ENV -> prompt -> default
-    log_file = args.log_file or os.getenv("LOG_FILE_PATH")
-    if not log_file:
-        try:
-            # interactive prompt (install flow will provide)
-            val = input("Enter log file path (press Enter for /var/log/syslog): ").strip()
-        except Exception:
-            val = ""
-        log_file = val or "/var/log/syslog"
-    # do not fail if the path does not exist yet; monitor will wait
-    return log_file, args.port, args.node_id
+    parser = argparse.ArgumentParser(description="Log Collector Daemon (error monitoring + control endpoint)")
+    parser.add_argument("--log-file", "-l", required=True, help="Path to log file to monitor")
+    parser.add_argument("--api-url", "-a", required=True, help="Central API URL to send filtered error logs (HTTP POST)")
+    parser.add_argument("--control-port", "-p", type=int, default=DEFAULT_CONTROL_PORT, help="Port for control HTTP server")
+    parser.add_argument("--ws-port", type=int, default=DEFAULT_WS_PORT, help="Port where livelogs will host websocket")
+    parser.add_argument("--node-id", "-n", help="optional node identifier")
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    log_file, port, node_id = parse_args()
-    daemon = LogCollectorDaemon(log_file=log_file, port=port, node_id=node_id)
+    args = parse_args()
+    daemon = LogCollectorDaemon(log_file=args.log_file, api_url=args.api_url, ws_port=args.ws_port, node_id=args.node_id)
+    daemon.start()
+    app = make_app(daemon)
+    # run flask on specified control port
+    print(f"[daemon] Control HTTP endpoint listening on 0.0.0.0:{args.control_port}/control")
     try:
-        asyncio.run(daemon.run())
+        # do not use debug in production
+        app.run(host="0.0.0.0", port=args.control_port)
     except KeyboardInterrupt:
-        print("[daemon] Interrupted, exiting.")
+        print("[daemon] interrupted")
+    finally:
+        daemon.stop()
