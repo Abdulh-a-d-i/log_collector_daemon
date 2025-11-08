@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # log_collector_daemon.py
+from flask_cors import CORS
 import threading
 import time
 import os
@@ -36,14 +37,14 @@ def get_node_id():
 def detect_severity(line: str) -> str:
     text = line.lower()
     if any(k in text for k in ["panic", "fatal", "critical", "crit"]):
-        return "CRITICAL"
+        return "critical"
     if any(k in text for k in ["fail", "failed", "failure"]):
-        return "FAILURE"
+        return "failure"
     if any(k in text for k in ["err", "error"]):
-        return "ERROR"
+        return "error"
     if any(k in text for k in ["warn", "warning"]):
-        return "WARNING"
-    return "INFO"
+        return "warn"
+    return "info"
 
 # Try to parse a timestamp from a common syslog-like prefix.
 # If parsing fails, return UTC now.
@@ -132,10 +133,12 @@ class LogCollectorDaemon:
                         severity = detect_severity(line)
                         ts = parse_timestamp(line)
                         payload = {
-                            "node_id": self.node_id,
                             "timestamp": ts,
-                            "severity": severity,
-                            "log": line.rstrip("\n")
+    "system_ip": self.node_id,
+    "log_path": self.log_file,
+    "application": "system",   # or whatever app name
+    "log_line": line.rstrip("\n"),
+    "severity": severity
                         }
                         # best-effort post; don't crash daemon if fails
                         if self.api_url:
@@ -163,7 +166,8 @@ class LogCollectorDaemon:
             cmd = [sys.executable, script, self.log_file, str(self.ws_port), self.node_id]
             try:
                 # spawn as detached process group
-                self._live_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
+                self._live_proc = subprocess.Popen(cmd, preexec_fn=os.setsid)
+
                 return True, str(self._live_proc.pid)
             except Exception as e:
                 return False, f"spawn_error: {e}"
@@ -212,6 +216,7 @@ def tail_lines_from_file(fobj, n):
 # -------- Flask HTTP control app --------
 def make_app(daemon: LogCollectorDaemon):
     app = Flask(__name__)
+    CORS(app, origins=["http://localhost:5173"])  # ✅ add this
 
     @app.route("/control", methods=["POST"])
     def control():
@@ -238,6 +243,7 @@ def make_app(daemon: LogCollectorDaemon):
         return jsonify({"status":"ok", "node_id": daemon.node_id}), HTTPStatus.OK
 
     return app
+
 
 # -------- CLI / Entrypoint --------
 def parse_args():
