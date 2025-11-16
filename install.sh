@@ -7,7 +7,7 @@ API_URL="$2"
 
 # Provide defaults if arguments are missing
 LOG_FILE=${LOG_FILE:-/var/log/syslog}
-API_URL=${API_URL:-http://127.0.0.1:3000/api/ticket}
+API_URL=${API_URL:-http://13.235.113.192:3000/api/ticket}
 
 echo "[Installer] Log file: $LOG_FILE"
 echo "[Installer] API URL: $API_URL"
@@ -41,7 +41,7 @@ if [ ! -f "$FLAG_FILE" ]; then
   python3 system_info.py
 
   # send payload to API
-  NEXTJS_API_URL="http://192.168.100.8:3000/api/system_info"
+  NEXTJS_API_URL="http://13.235.113.192:3000/api/system_info"
   echo "[Installer] Sending system info to API: $NEXTJS_API_URL"
   python3 - <<EOF
 import requests
