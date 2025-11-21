@@ -17,9 +17,13 @@ from flask import Flask, request, jsonify
 import subprocess
 import sys
 
+# Import the telemetry collector
+from telemetry_collector import TelemetryCollector
+
 # -------- CONFIGURATION & defaults --------
 DEFAULT_WS_PORT = int(os.getenv("LIVE_WS_PORT", "8755"))  # port where livelogs.py will host WS
 DEFAULT_CONTROL_PORT = int(os.getenv("CONTROL_PORT", "8754"))  # this daemon's control HTTP port
+DEFAULT_TELEMETRY_INTERVAL = int(os.getenv("TELEMETRY_INTERVAL", "60"))  # telemetry collection interval
 ERROR_KEYWORDS = [
     "emerg", "emergency", "alert", "crit", "critical",
     "err", "error", "fail", "failed", "failure", "panic", "fatal"
@@ -77,7 +81,9 @@ def parse_timestamp(line: str) -> str:
 
 # -------- Daemon class --------
 class LogCollectorDaemon:
-    def __init__(self, log_file, api_url, ws_port=DEFAULT_WS_PORT, node_id=None, interval=1, tail_lines=200):
+    def __init__(self, log_file, api_url, ws_port=DEFAULT_WS_PORT, node_id=None, interval=1, 
+                 tail_lines=200, telemetry_interval=DEFAULT_TELEMETRY_INTERVAL, 
+                 enable_telemetry=True):
         self.log_file = os.path.abspath(log_file)
         self.api_url = api_url.rstrip("/") if api_url else None
         self.ws_port = int(ws_port)
@@ -89,6 +95,15 @@ class LogCollectorDaemon:
         self._live_proc = None  # subprocess for livelogs.py
         self._live_lock = threading.Lock()
 
+        # Telemetry collector
+        self.telemetry = None
+        if enable_telemetry and self.api_url:
+            self.telemetry = TelemetryCollector(
+                api_url=self.api_url,
+                node_id=self.node_id,
+                interval=telemetry_interval
+            )
+
         # compiled keyword regex for faster matching
         kw = "|".join(re.escape(k) for k in ERROR_KEYWORDS)
         self._err_re = re.compile(rf"\b({kw})\b", re.IGNORECASE)
@@ -97,11 +112,20 @@ class LogCollectorDaemon:
         # starts background thread for monitoring
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
+        
+        # Start telemetry collection
+        if self.telemetry:
+            self.telemetry.start()
 
     def stop(self):
         self._stop_flag.set()
         if self._thread:
             self._thread.join(timeout=2)
+        
+        # Stop telemetry collection
+        if self.telemetry:
+            self.telemetry.stop()
+            
         # ensure live proc stopped
         self.stop_livelogs()
 
@@ -134,19 +158,19 @@ class LogCollectorDaemon:
                         ts = parse_timestamp(line)
                         payload = {
                             "timestamp": ts,
-    "system_ip": self.node_id,
-    "log_path": self.log_file,
-    "application": "system",   # or whatever app name
-    "log_line": line.rstrip("\n"),
-    "severity": severity
+                            "system_ip": self.node_id,
+                            "log_path": self.log_file,
+                            "application": "system",   # or whatever app name
+                            "log_line": line.rstrip("\n"),
+                            "severity": severity
                         }
                         # best-effort post; don't crash daemon if fails
                         if self.api_url:
                             try:
-                                resp = requests.post(self.api_url, json=payload, timeout=5)
+                                resp = requests.post(f"{self.api_url}/logs", json=payload, timeout=5)
                                 # non-200 isn't fatal; log if needed
                                 if resp.status_code >= 400:
-                                    print(f"[daemon] POST to {self.api_url} returned {resp.status_code}")
+                                    print(f"[daemon] POST to {self.api_url}/logs returned {resp.status_code}")
                             except Exception as e:
                                 print(f"[daemon] Error posting to API: {e}")
                         else:
@@ -167,7 +191,6 @@ class LogCollectorDaemon:
             try:
                 # spawn as detached process group
                 self._live_proc = subprocess.Popen(cmd, preexec_fn=os.setsid)
-
                 return True, str(self._live_proc.pid)
             except Exception as e:
                 return False, f"spawn_error: {e}"
@@ -216,7 +239,7 @@ def tail_lines_from_file(fobj, n):
 # -------- Flask HTTP control app --------
 def make_app(daemon: LogCollectorDaemon):
     app = Flask(__name__)
-    CORS(app, origins=["http://localhost:5173"])  # ✅ add this
+    CORS(app, origins="*")  # Allow all origins
 
     @app.route("/control", methods=["POST"])
     def control():
@@ -235,33 +258,55 @@ def make_app(daemon: LogCollectorDaemon):
                 return jsonify({"status": "stopped"}), HTTPStatus.OK
             else:
                 return jsonify({"status": "error", "detail": info}), HTTPStatus.BAD_REQUEST
+        
+        if cmd == "get_telemetry":
+            if daemon.telemetry:
+                metrics = daemon.telemetry.collect_all_metrics()
+                return jsonify(metrics), HTTPStatus.OK
+            else:
+                return jsonify({"status": "telemetry_disabled"}), HTTPStatus.BAD_REQUEST
 
         return jsonify({"status": "unknown_command"}), HTTPStatus.BAD_REQUEST
 
     @app.route("/health", methods=["GET"])
     def health():
-        return jsonify({"status":"ok", "node_id": daemon.node_id}), HTTPStatus.OK
+        return jsonify({
+            "status": "ok", 
+            "node_id": daemon.node_id,
+            "telemetry_enabled": daemon.telemetry is not None
+        }), HTTPStatus.OK
 
     return app
 
 
 # -------- CLI / Entrypoint --------
 def parse_args():
-    parser = argparse.ArgumentParser(description="Log Collector Daemon (error monitoring + control endpoint)")
+    parser = argparse.ArgumentParser(description="Log Collector Daemon (error monitoring + telemetry + control endpoint)")
     parser.add_argument("--log-file", "-l", required=True, help="Path to log file to monitor")
-    parser.add_argument("--api-url", "-a", required=True, help="Central API URL to send filtered error logs (HTTP POST)")
+    parser.add_argument("--api-url", "-a", required=True, help="Central API URL to send logs and telemetry")
     parser.add_argument("--control-port", "-p", type=int, default=DEFAULT_CONTROL_PORT, help="Port for control HTTP server")
     parser.add_argument("--ws-port", type=int, default=DEFAULT_WS_PORT, help="Port where livelogs will host websocket")
     parser.add_argument("--node-id", "-n", help="optional node identifier")
+    parser.add_argument("--telemetry-interval", "-t", type=int, default=DEFAULT_TELEMETRY_INTERVAL, 
+                        help="Telemetry collection interval in seconds (default: 60)")
+    parser.add_argument("--disable-telemetry", action="store_true", help="Disable telemetry collection")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
-    daemon = LogCollectorDaemon(log_file=args.log_file, api_url=args.api_url, ws_port=args.ws_port, node_id=args.node_id)
+    daemon = LogCollectorDaemon(
+        log_file=args.log_file, 
+        api_url=args.api_url, 
+        ws_port=args.ws_port, 
+        node_id=args.node_id,
+        telemetry_interval=args.telemetry_interval,
+        enable_telemetry=not args.disable_telemetry
+    )
     daemon.start()
     app = make_app(daemon)
     # run flask on specified control port
     print(f"[daemon] Control HTTP endpoint listening on 0.0.0.0:{args.control_port}/control")
+    print(f"[daemon] Telemetry: {'enabled' if daemon.telemetry else 'disabled'}")
     try:
         # do not use debug in production
         app.run(host="0.0.0.0", port=args.control_port)
