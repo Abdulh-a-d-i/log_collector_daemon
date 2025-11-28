@@ -79,6 +79,10 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 WORK_DIR="$(pwd)"
 PYTHON_PATH="$WORK_DIR/venv/bin/python3"
 
+# Create log file with proper permissions
+sudo touch /var/log/resolvix.log
+sudo chmod 666 /var/log/resolvix.log
+
 sudo bash -c "cat > $SERVICE_FILE" <<EOF
 [Unit]
 Description=Resolvix
@@ -87,10 +91,13 @@ After=network.target
 [Service]
 User=$(whoami)
 WorkingDirectory=${WORK_DIR}
+ExecStartPre=/bin/bash -c 'touch /var/log/resolvix.log && chmod 666 /var/log/resolvix.log'
 ExecStart=${PYTHON_PATH} ${WORK_DIR}/log_collector_daemon.py --log-file "${LOG_FILE}" --api-url "${API_URL}"
 Restart=always
 RestartSec=10
 Environment=PATH=${WORK_DIR}/venv/bin
+StandardOutput=append:/var/log/resolvix.log
+StandardError=append:/var/log/resolvix.log
 
 [Install]
 WantedBy=multi-user.target

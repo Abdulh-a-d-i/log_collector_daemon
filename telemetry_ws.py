@@ -26,17 +26,26 @@ class TelemetryCollector:
         
     def collect_all_metrics(self):
         """Collect all system metrics"""
-        return {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "node_id": self.node_id,
-            "metrics": {
-                "cpu": self._collect_cpu(),
-                "memory": self._collect_memory(),
-                "disk": self._collect_disk(),
-                "network": self._collect_network(),
-                "processes": self._collect_processes()
+        try:
+            return {
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "node_id": self.node_id,
+                "metrics": {
+                    "cpu": self._collect_cpu(),
+                    "memory": self._collect_memory(),
+                    "disk": self._collect_disk(),
+                    "network": self._collect_network(),
+                    "processes": self._collect_processes()
+                }
             }
-        }
+        except Exception as e:
+            print(f"[telemetry] Error collecting metrics: {e}")
+            return {
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "node_id": self.node_id,
+                "error": str(e),
+                "metrics": {}
+            }
     
     def _collect_cpu(self):
         """Collect CPU metrics"""
@@ -103,26 +112,42 @@ class TelemetryCollector:
     
     def _collect_network(self):
         """Collect network metrics"""
-        net_io = psutil.net_io_counters()
-        current_time = time.time()
-        
-        if self._last_net and self._last_time:
-            time_delta = current_time - self._last_time
-            bytes_sent_per_sec = (net_io.bytes_sent - self._last_net.bytes_sent) / (1024**2) / time_delta
-            bytes_recv_per_sec = (net_io.bytes_recv - self._last_net.bytes_recv) / (1024**2) / time_delta
-        else:
-            bytes_sent_per_sec = 0
-            bytes_recv_per_sec = 0
-        
-        self._last_net = net_io
-        
-        return {
-            "bytes_sent_mb_per_sec": round(bytes_sent_per_sec, 2),
-            "bytes_recv_mb_per_sec": round(bytes_recv_per_sec, 2),
-            "packets_sent": net_io.packets_sent,
-            "packets_recv": net_io.packets_recv,
-            "active_connections": len(psutil.net_connections())
-        }
+        try:
+            net_io = psutil.net_io_counters()
+            current_time = time.time()
+            
+            if self._last_net and self._last_time:
+                time_delta = current_time - self._last_time
+                bytes_sent_per_sec = (net_io.bytes_sent - self._last_net.bytes_sent) / (1024**2) / time_delta
+                bytes_recv_per_sec = (net_io.bytes_recv - self._last_net.bytes_recv) / (1024**2) / time_delta
+            else:
+                bytes_sent_per_sec = 0
+                bytes_recv_per_sec = 0
+            
+            self._last_net = net_io
+            
+            # Get connection count safely
+            try:
+                conn_count = len(psutil.net_connections())
+            except (psutil.AccessDenied, PermissionError):
+                conn_count = 0
+            
+            return {
+                "bytes_sent_mb_per_sec": round(bytes_sent_per_sec, 2),
+                "bytes_recv_mb_per_sec": round(bytes_recv_per_sec, 2),
+                "packets_sent": net_io.packets_sent,
+                "packets_recv": net_io.packets_recv,
+                "active_connections": conn_count
+            }
+        except Exception as e:
+            print(f"[telemetry] Error collecting network metrics: {e}")
+            return {
+                "bytes_sent_mb_per_sec": 0,
+                "bytes_recv_mb_per_sec": 0,
+                "packets_sent": 0,
+                "packets_recv": 0,
+                "active_connections": 0
+            }
     
     def _collect_processes(self):
         """Collect process metrics"""
@@ -204,46 +229,57 @@ class TelemetryWebSocketServer:
                 
     async def handler(self, websocket, path):
         """Handle individual WebSocket connections"""
-        await self.register(websocket)
-        
         try:
+            await self.register(websocket)
+            
             # Send initial connection confirmation
-            welcome = {
-                "type": "connection",
-                "status": "connected",
-                "node_id": self.node_id,
-                "interval": self.interval,
-                "timestamp": datetime.utcnow().isoformat() + "Z"
-            }
-            await websocket.send(json.dumps(welcome))
+            try:
+                welcome = {
+                    "type": "connection",
+                    "status": "connected",
+                    "node_id": self.node_id,
+                    "interval": self.interval,
+                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                }
+                await websocket.send(json.dumps(welcome))
+                print(f"[telemetry-ws] Sent welcome message to client")
+            except Exception as e:
+                print(f"[telemetry-ws] Error sending welcome: {e}")
+                await self.unregister(websocket)
+                return
             
             # Keep connection alive and handle incoming messages
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
-                    
-                    # Handle client commands
-                    if data.get("command") == "get_metrics":
-                        # Send immediate metrics on demand
-                        metrics = self.collector.collect_all_metrics()
-                        await websocket.send(json.dumps(metrics))
+            try:
+                async for message in websocket:
+                    try:
+                        data = json.loads(message)
                         
-                    elif data.get("command") == "ping":
-                        pong = {
-                            "type": "pong",
-                            "timestamp": datetime.utcnow().isoformat() + "Z"
-                        }
-                        await websocket.send(json.dumps(pong))
-                        
-                except json.JSONDecodeError:
-                    print(f"[telemetry-ws] Invalid JSON received from client")
-                except Exception as e:
-                    print(f"[telemetry-ws] Error handling message: {e}")
+                        # Handle client commands
+                        if data.get("command") == "get_metrics":
+                            # Send immediate metrics on demand
+                            metrics = self.collector.collect_all_metrics()
+                            await websocket.send(json.dumps(metrics))
+                            
+                        elif data.get("command") == "ping":
+                            pong = {
+                                "type": "pong",
+                                "timestamp": datetime.utcnow().isoformat() + "Z"
+                            }
+                            await websocket.send(json.dumps(pong))
+                            
+                    except json.JSONDecodeError:
+                        print(f"[telemetry-ws] Invalid JSON received from client")
+                    except Exception as e:
+                        print(f"[telemetry-ws] Error handling message: {e}")
+            except websockets.exceptions.ConnectionClosed:
+                print(f"[telemetry-ws] Client connection closed normally")
+            except Exception as e:
+                print(f"[telemetry-ws] Error in message loop: {e}")
                     
-        except websockets.exceptions.ConnectionClosed:
-            pass
         except Exception as e:
-            print(f"[telemetry-ws] Connection error: {e}")
+            print(f"[telemetry-ws] Handler error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             await self.unregister(websocket)
             

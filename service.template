@@ -5,9 +5,12 @@ After=network.target
 [Service]
 User={USER}
 WorkingDirectory={PROJECT_DIR}
+ExecStartPre=/bin/bash -c 'touch /var/log/resolvix.log && chmod 666 /var/log/resolvix.log'
 ExecStart={PROJECT_DIR}/venv/bin/python {PROJECT_DIR}/log_collector_daemon.py --log-file "{LOG_FILE_PATH}"
 Restart=always
 RestartSec=10
+StandardOutput=append:/var/log/resolvix.log
+StandardError=append:/var/log/resolvix.log
 
 [Install]
 WantedBy=multi-user.target
