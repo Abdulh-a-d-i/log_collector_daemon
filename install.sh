@@ -74,14 +74,14 @@ if [ ! -f "$LOG_FILE" ]; then
 fi
 
 # create systemd service template (using current directory)
-SERVICE_NAME="log_collector_daemon"
+SERVICE_NAME="resolvix"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 WORK_DIR="$(pwd)"
 PYTHON_PATH="$WORK_DIR/venv/bin/python3"
 
 sudo bash -c "cat > $SERVICE_FILE" <<EOF
 [Unit]
-Description=Log Collector Daemon
+Description=Resolvix
 After=network.target
 
 [Service]

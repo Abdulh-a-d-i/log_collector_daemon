@@ -1,5 +1,5 @@
 [Unit]
-Description=Log Collector Daemon
+Description=Resolvix
 After=network.target
 
 [Service]

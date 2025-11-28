@@ -1,4 +1,4 @@
-# Log Collector Daemon
+# Resolvix
 
 A comprehensive distributed log monitoring and telemetry collection system for Linux servers. This daemon monitors system logs in real-time, filters critical errors, streams live logs via WebSocket, and collects system telemetry metrics for centralized monitoring.
 
@@ -47,7 +47,7 @@ A comprehensive distributed log monitoring and telemetry collection system for L
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Log Collector Daemon                      │
+│                         Resolvix                             │
 │                                                              │
 │  ┌────────────────┐  ┌──────────────┐  ┌─────────────────┐ │
 │  │ Log Monitor    │  │ Telemetry    │  │ Control API     │ │
@@ -104,8 +104,8 @@ websockets>=10.0
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/log-collector-daemon.git
-cd log-collector-daemon
+git clone https://github.com/yourusername/resolvix.git
+cd resolvix
 ```
 
 ### 2. Create Virtual Environment
@@ -145,7 +145,7 @@ sudo ./install.sh
 
 ```bash
 # Check service status
-sudo systemctl status log-collector
+sudo systemctl status resolvix
 
 # Check daemon is responding
 curl http://localhost:8754/health
@@ -388,25 +388,25 @@ Control daemon operations.
 
 ```bash
 # Start service
-sudo systemctl start log-collector
+sudo systemctl start resolvix
 
 # Stop service
-sudo systemctl stop log-collector
+sudo systemctl stop resolvix
 
 # Restart service
-sudo systemctl restart log-collector
+sudo systemctl restart resolvix
 
 # Check status
-sudo systemctl status log-collector
+sudo systemctl status resolvix
 
 # Enable on boot
-sudo systemctl enable log-collector
+sudo systemctl enable resolvix
 
 # Disable on boot
-sudo systemctl disable log-collector
+sudo systemctl disable resolvix
 
 # View logs
-sudo journalctl -u log-collector -f
+sudo journalctl -u resolvix -f
 ```
 
 ### Service Template
@@ -415,7 +415,7 @@ The `service.template` file is used during installation:
 
 ```ini
 [Unit]
-Description=Log Collector Daemon
+Description=Resolvix
 After=network.target
 
 [Service]
@@ -440,14 +440,14 @@ If you prefer manual installation:
 
 ```bash
 # 1. Copy service file
-sudo cp log-collector.service /etc/systemd/system/
+sudo cp resolvix.service /etc/systemd/system/
 
 # 2. Reload systemd
 sudo systemctl daemon-reload
 
 # 3. Enable and start
-sudo systemctl enable log-collector
-sudo systemctl start log-collector
+sudo systemctl enable resolvix
+sudo systemctl start resolvix
 ```
 
 ##  Uninstallation
@@ -469,17 +469,17 @@ The script will:
 
 ```bash
 # Stop and disable service
-sudo systemctl stop log-collector
-sudo systemctl disable log-collector
+sudo systemctl stop resolvix
+sudo systemctl disable resolvix
 
 # Remove service file
-sudo rm /etc/systemd/system/log-collector.service
+sudo rm /etc/systemd/system/resolvix.service
 
 # Reload systemd
 sudo systemctl daemon-reload
 
 # Remove project directory
-rm -rf /path/to/log-collector-daemon
+rm -rf /path/to/resolvix
 ```
 
 ##  Troubleshooting
@@ -488,7 +488,7 @@ rm -rf /path/to/log-collector-daemon
 
 **Check logs:**
 ```bash
-sudo journalctl -u log-collector -n 50
+sudo journalctl -u resolvix -n 50
 ```
 
 **Common issues:**
@@ -560,7 +560,7 @@ curl -X POST http://your-api-url/telemetry \
 
 **Check daemon logs for errors:**
 ```bash
-sudo journalctl -u log-collector | grep telemetry
+sudo journalctl -u resolvix | grep telemetry
 ```
 
 ### Permission Denied Errors
@@ -569,7 +569,7 @@ Some metrics require elevated permissions:
 
 ```bash
 # Run with sudo or adjust service user
-sudo systemctl edit log-collector
+sudo systemctl edit resolvix
 
 # Add to override file:
 [Service]
@@ -660,4 +660,4 @@ For issues and questions:
 **Version:** 1.0.0  
 **Last Updated:** January 2025  
 **Author:** Your Name  
-**Repository:** https://github.com/yourusername/log-collector-daemon
+**Repository:** https://github.com/yourusername/resolvix

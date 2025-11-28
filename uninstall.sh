@@ -2,9 +2,9 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_NAME="logcollector.service"
-ENV_DIR="/etc/logcollector"
-ENV_FILE="$ENV_DIR/logcollector.env"
+SERVICE_NAME="resolvix.service"
+ENV_DIR="/etc/resolvix"
+ENV_FILE="$ENV_DIR/resolvix.env"
 WRAPPER="$PROJECT_DIR/run_logcollector.sh"
 VENV_DIR="$PROJECT_DIR/venv"
 
