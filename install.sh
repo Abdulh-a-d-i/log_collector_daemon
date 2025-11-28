@@ -91,7 +91,6 @@ After=network.target
 [Service]
 User=$(whoami)
 WorkingDirectory=${WORK_DIR}
-ExecStartPre=+/bin/bash -c "touch /var/log/resolvix.log; chmod 666 /var/log/resolvix.log"
 ExecStart=${PYTHON_PATH} ${WORK_DIR}/log_collector_daemon.py --log-file "${LOG_FILE}" --api-url "${API_URL}"
 Restart=always
 RestartSec=10
