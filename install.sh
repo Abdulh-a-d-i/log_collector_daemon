@@ -32,9 +32,9 @@ pip install websockets psutil requests flask_cors
 chmod +x livelogs.py log_collector_daemon.py system_info.py
 
 # 🔹 run system_info only once using flag
-FLAG_FILE="/var/log/system_info_done.flag"
+# FLAG_FILE="/var/log/system_info_done.flag"
 
-if [ ! -f "$FLAG_FILE" ]; then
+# if [ ! -f "$FLAG_FILE" ]; then
   echo "[Installer] Collecting system information..."
 
   # run system_info.py
@@ -60,11 +60,11 @@ except Exception as e:
 EOF
 
   # create flag file so it doesn't run again
-  sudo touch "$FLAG_FILE"
-  sudo chmod 644 "$FLAG_FILE"
-else
-  echo "[Installer] System info already collected and sent, skipping..."
-fi
+  # sudo touch "$FLAG_FILE"
+  # sudo chmod 644 "$FLAG_FILE"
+# else
+#   echo "[Installer] System info already collected and sent, skipping..."
+# fi
 
 
 

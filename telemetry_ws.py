@@ -11,7 +11,140 @@ import signal
 import sys
 import argparse
 from datetime import datetime
-from telemetry_collector import TelemetryCollector
+import psutil
+import time
+
+class TelemetryCollector:
+    """Collects system telemetry metrics"""
+    def __init__(self, api_url, node_id, interval=60):
+        self.api_url = api_url
+        self.node_id = node_id
+        self.interval = interval
+        self._last_net = None
+        self._last_disk = None
+        self._last_time = None
+        
+    def collect_all_metrics(self):
+        """Collect all system metrics"""
+        return {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "node_id": self.node_id,
+            "metrics": {
+                "cpu": self._collect_cpu(),
+                "memory": self._collect_memory(),
+                "disk": self._collect_disk(),
+                "network": self._collect_network(),
+                "processes": self._collect_processes()
+            }
+        }
+    
+    def _collect_cpu(self):
+        """Collect CPU metrics"""
+        load_avg = psutil.getloadavg()
+        return {
+            "cpu_usage_percent": psutil.cpu_percent(interval=1),
+            "cpu_per_core_percent": psutil.cpu_percent(interval=1, percpu=True),
+            "load_avg_1min": load_avg[0],
+            "load_avg_5min": load_avg[1],
+            "load_avg_15min": load_avg[2]
+        }
+    
+    def _collect_memory(self):
+        """Collect memory metrics"""
+        mem = psutil.virtual_memory()
+        swap = psutil.swap_memory()
+        return {
+            "memory_total_gb": round(mem.total / (1024**3), 2),
+            "memory_used_gb": round(mem.used / (1024**3), 2),
+            "memory_available_gb": round(mem.available / (1024**3), 2),
+            "memory_usage_percent": mem.percent,
+            "swap_total_gb": round(swap.total / (1024**3), 2),
+            "swap_used_gb": round(swap.used / (1024**3), 2),
+            "swap_usage_percent": swap.percent
+        }
+    
+    def _collect_disk(self):
+        """Collect disk metrics"""
+        disk_usage = {}
+        for partition in psutil.disk_partitions():
+            try:
+                usage = psutil.disk_usage(partition.mountpoint)
+                disk_usage[partition.mountpoint] = {
+                    "total_gb": round(usage.total / (1024**3), 2),
+                    "used_gb": round(usage.used / (1024**3), 2),
+                    "free_gb": round(usage.free / (1024**3), 2),
+                    "usage_percent": usage.percent
+                }
+            except:
+                pass
+        
+        # Calculate disk I/O rates
+        disk_io = psutil.disk_io_counters()
+        current_time = time.time()
+        
+        if self._last_disk and self._last_time:
+            time_delta = current_time - self._last_time
+            read_mb_per_sec = (disk_io.read_bytes - self._last_disk.read_bytes) / (1024**2) / time_delta
+            write_mb_per_sec = (disk_io.write_bytes - self._last_disk.write_bytes) / (1024**2) / time_delta
+        else:
+            read_mb_per_sec = 0
+            write_mb_per_sec = 0
+        
+        self._last_disk = disk_io
+        self._last_time = current_time
+        
+        return {
+            "disk_usage": disk_usage,
+            "disk_io": {
+                "read_mb_per_sec": round(read_mb_per_sec, 2),
+                "write_mb_per_sec": round(write_mb_per_sec, 2)
+            }
+        }
+    
+    def _collect_network(self):
+        """Collect network metrics"""
+        net_io = psutil.net_io_counters()
+        current_time = time.time()
+        
+        if self._last_net and self._last_time:
+            time_delta = current_time - self._last_time
+            bytes_sent_per_sec = (net_io.bytes_sent - self._last_net.bytes_sent) / (1024**2) / time_delta
+            bytes_recv_per_sec = (net_io.bytes_recv - self._last_net.bytes_recv) / (1024**2) / time_delta
+        else:
+            bytes_sent_per_sec = 0
+            bytes_recv_per_sec = 0
+        
+        self._last_net = net_io
+        
+        return {
+            "bytes_sent_mb_per_sec": round(bytes_sent_per_sec, 2),
+            "bytes_recv_mb_per_sec": round(bytes_recv_per_sec, 2),
+            "packets_sent": net_io.packets_sent,
+            "packets_recv": net_io.packets_recv,
+            "active_connections": len(psutil.net_connections())
+        }
+    
+    def _collect_processes(self):
+        """Collect process metrics"""
+        processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'memory_percent']):
+            try:
+                processes.append({
+                    "pid": proc.info['pid'],
+                    "name": proc.info['name'],
+                    "memory_percent": round(proc.info['memory_percent'], 2)
+                })
+            except:
+                pass
+        
+        # Sort by memory usage and get top 5
+        top_processes = sorted(processes, key=lambda x: x['memory_percent'], reverse=True)[:5]
+        
+        return {
+            "process_count": len(processes),
+            "top_memory_processes": top_processes
+        }
+
 
 class TelemetryWebSocketServer:
     def __init__(self, node_id: str, port: int, interval: int = 60):
