@@ -27,19 +27,25 @@ class TelemetryCollector:
     def collect_all_metrics(self):
         """Collect all system metrics"""
         try:
+            cpu = self._collect_cpu()
+            memory = self._collect_memory()
+            disk = self._collect_disk()
+            network = self._collect_network()
+            processes = self._collect_processes()
+            
             return {
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "node_id": self.node_id,
                 "metrics": {
-                    "cpu": self._collect_cpu(),
-                    "memory": self._collect_memory(),
-                    "disk": self._collect_disk(),
-                    "network": self._collect_network(),
-                    "processes": self._collect_processes()
+                    "cpu": cpu,
+                    "memory": memory,
+                    "disk": disk,
+                    "network": network,
+                    "processes": processes
                 }
             }
         except Exception as e:
-            print(f"[telemetry] Error collecting metrics: {e}")
+            print(f"[telemetry] ERROR: {e}")
             return {
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "node_id": self.node_id,
@@ -51,8 +57,8 @@ class TelemetryCollector:
         """Collect CPU metrics"""
         load_avg = psutil.getloadavg()
         return {
-            "cpu_usage_percent": psutil.cpu_percent(interval=1),
-            "cpu_per_core_percent": psutil.cpu_percent(interval=1, percpu=True),
+            "cpu_usage_percent": psutil.cpu_percent(interval=0.1),
+            "cpu_per_core_percent": psutil.cpu_percent(interval=0.1, percpu=True),
             "load_avg_1min": load_avg[0],
             "load_avg_5min": load_avg[1],
             "load_avg_15min": load_avg[2]
@@ -203,32 +209,31 @@ class TelemetryWebSocketServer:
             
     async def broadcast_telemetry(self):
         """Continuously collect and broadcast telemetry to all connected clients"""
-        print(f"[telemetry-ws] Starting telemetry broadcast loop (interval: {self.interval}s)")
+        print(f"[telemetry-ws] Broadcast started (interval: {self.interval}s)")
         
         while self.running:
             try:
                 if self.clients:
-                    # Collect metrics
                     metrics = self.collector.collect_all_metrics()
                     message = json.dumps(metrics)
                     
-                    # Send to all connected clients
                     if self.clients:
                         await asyncio.gather(
                             *[self.send_to_client(client, message) for client in self.clients],
                             return_exceptions=True
                         )
-                        print(f"[telemetry-ws] Broadcasted metrics to {len(self.clients)} client(s)")
                 
                 # Wait for next interval
                 await asyncio.sleep(self.interval)
                 
             except Exception as e:
-                print(f"[telemetry-ws] Error in broadcast loop: {e}")
-                await asyncio.sleep(5)  # Wait before retrying
+                print(f"[telemetry-ws] Broadcast error: {e}")
+                await asyncio.sleep(5)
                 
-    async def handler(self, websocket, path):
+    async def handler(self, websocket):
         """Handle individual WebSocket connections"""
+        print(f"[telemetry-ws] Client connected: {websocket.remote_address}")
+        
         try:
             await self.register(websocket)
             
@@ -242,9 +247,8 @@ class TelemetryWebSocketServer:
                     "timestamp": datetime.utcnow().isoformat() + "Z"
                 }
                 await websocket.send(json.dumps(welcome))
-                print(f"[telemetry-ws] Sent welcome message to client")
             except Exception as e:
-                print(f"[telemetry-ws] Error sending welcome: {e}")
+                print(f"[telemetry-ws] Welcome error: {e}")
                 await self.unregister(websocket)
                 return
             
@@ -256,7 +260,6 @@ class TelemetryWebSocketServer:
                         
                         # Handle client commands
                         if data.get("command") == "get_metrics":
-                            # Send immediate metrics on demand
                             metrics = self.collector.collect_all_metrics()
                             await websocket.send(json.dumps(metrics))
                             
@@ -268,18 +271,16 @@ class TelemetryWebSocketServer:
                             await websocket.send(json.dumps(pong))
                             
                     except json.JSONDecodeError:
-                        print(f"[telemetry-ws] Invalid JSON received from client")
+                        pass
                     except Exception as e:
-                        print(f"[telemetry-ws] Error handling message: {e}")
+                        print(f"[telemetry-ws] Message error: {e}")
             except websockets.exceptions.ConnectionClosed:
-                print(f"[telemetry-ws] Client connection closed normally")
+                pass
             except Exception as e:
-                print(f"[telemetry-ws] Error in message loop: {e}")
+                print(f"[telemetry-ws] Connection error: {e}")
                     
         except Exception as e:
             print(f"[telemetry-ws] Handler error: {e}")
-            import traceback
-            traceback.print_exc()
         finally:
             await self.unregister(websocket)
             
@@ -298,7 +299,7 @@ class TelemetryWebSocketServer:
         self.broadcast_task = asyncio.create_task(self.broadcast_telemetry())
         
         # Start WebSocket server
-        async with websockets.serve(self.handler, "0.0.0.0", self.port):
+        async with websockets.serve(self.handler, "0.0.0.0", self.port, ping_interval=20, ping_timeout=10):
             print(f"[telemetry-ws] Server started on ws://0.0.0.0:{self.port}")
             print(f"[telemetry-ws] Node ID: {self.node_id}")
             print(f"[telemetry-ws] Broadcast interval: {self.interval}s")

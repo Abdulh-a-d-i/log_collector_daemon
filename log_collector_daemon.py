@@ -45,7 +45,7 @@ except Exception as e:
 DEFAULT_WS_PORT = int(os.getenv("LIVE_WS_PORT", "8755"))  # port where livelogs.py will host WS
 DEFAULT_TELEMETRY_WS_PORT = int(os.getenv("TELEMETRY_WS_PORT", "8756"))  # port for telemetry WS
 DEFAULT_CONTROL_PORT = int(os.getenv("CONTROL_PORT", "8754"))  # this daemon's control HTTP port
-DEFAULT_TELEMETRY_INTERVAL = int(os.getenv("TELEMETRY_INTERVAL", "60"))  # telemetry collection interval
+DEFAULT_TELEMETRY_INTERVAL = int(os.getenv("TELEMETRY_INTERVAL", "5"))  # telemetry collection interval (5 seconds for production)
 ERROR_KEYWORDS = [
     "emerg", "emergency", "alert", "crit", "critical",
     "err", "error", "fail", "failed", "failure", "panic", "fatal"
