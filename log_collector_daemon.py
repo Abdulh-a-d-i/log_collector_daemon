@@ -46,6 +46,7 @@ DEFAULT_WS_PORT = 8755  # port where livelogs.py will host WS
 DEFAULT_TELEMETRY_WS_PORT = 8756  # port for telemetry WS
 DEFAULT_CONTROL_PORT = 8754  # this daemon's control HTTP port
 DEFAULT_TELEMETRY_INTERVAL = 3  # telemetry collection interval in seconds
+DEFAULT_HEARTBEAT_INTERVAL = 30  # heartbeat interval in seconds
 ERROR_KEYWORDS = [
     "emerg", "emergency", "alert", "crit", "critical",
     "err", "error", "fail", "failed", "failure", "panic", "fatal"
@@ -105,7 +106,8 @@ def parse_timestamp(line: str) -> str:
 class LogCollectorDaemon:
     def __init__(self, log_file, api_url, ws_port=DEFAULT_WS_PORT, 
                  telemetry_ws_port=DEFAULT_TELEMETRY_WS_PORT, node_id=None, 
-                 interval=1, tail_lines=200, telemetry_interval=DEFAULT_TELEMETRY_INTERVAL):
+                 interval=1, tail_lines=200, telemetry_interval=DEFAULT_TELEMETRY_INTERVAL,
+                 heartbeat_interval=DEFAULT_HEARTBEAT_INTERVAL):
         self.log_file = os.path.abspath(log_file)
         self.api_url = api_url.rstrip("/") if api_url else None
         self.ws_port = int(ws_port)
@@ -114,8 +116,10 @@ class LogCollectorDaemon:
         self.interval = interval
         self.tail_lines = tail_lines
         self.telemetry_interval = telemetry_interval
+        self.heartbeat_interval = heartbeat_interval
         self._stop_flag = threading.Event()
         self._thread = None
+        self._heartbeat_thread = None
         self._live_proc = None  # subprocess for livelogs.py
         self._telemetry_proc = None  # subprocess for telemetry_ws.py
         self._live_lock = threading.Lock()
@@ -132,11 +136,17 @@ class LogCollectorDaemon:
         logger.info(f"Node ID: {self.node_id}")
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
+        # start heartbeat thread
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+        logger.info(f"Heartbeat started (interval: {self.heartbeat_interval}s)")
 
     def stop(self):
         self._stop_flag.set()
         if self._thread:
             self._thread.join(timeout=2)
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=2)
         # ensure live proc stopped
         self.stop_livelogs()
         self.stop_telemetry()
@@ -148,6 +158,29 @@ class LogCollectorDaemon:
         except Exception:
             return []
 
+    def _heartbeat_loop(self):
+        """Send periodic heartbeat to backend"""
+        logger.info("Heartbeat loop started")
+        while not self._stop_flag.is_set():
+            try:
+                if self.api_url:
+                    payload = {
+                        "node_id": self.node_id,
+                        "status": "online",
+                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                    }
+                    try:
+                        resp = requests.post(f"{self.api_url}/heartbeat", json=payload, timeout=5)
+                        if resp.status_code >= 400:
+                            logger.warning(f"Heartbeat failed: {resp.status_code}")
+                    except Exception as e:
+                        logger.error(f"Heartbeat error: {e}")
+            except Exception as e:
+                logger.error(f"Heartbeat loop error: {e}")
+            
+            # Wait for next heartbeat
+            self._stop_flag.wait(timeout=self.heartbeat_interval)
+    
     def _monitor_loop(self):
         # main loop: tail log file continuously and send matches via HTTP POST
         # Wait until file exists; do not crash if missing.
@@ -406,7 +439,9 @@ def parse_args():
     parser.add_argument("--telemetry-ws-port", type=int, default=DEFAULT_TELEMETRY_WS_PORT, help="Port where telemetry websocket will be hosted")
     parser.add_argument("--node-id", "-n", help="optional node identifier")
     parser.add_argument("--telemetry-interval", "-t", type=int, default=DEFAULT_TELEMETRY_INTERVAL, 
-                        help="Telemetry collection interval in seconds (default: 60)")
+                        help="Telemetry collection interval in seconds (default: 3)")
+    parser.add_argument("--heartbeat-interval", type=int, default=DEFAULT_HEARTBEAT_INTERVAL, 
+                        help="Heartbeat interval in seconds (default: 30)")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -420,7 +455,8 @@ if __name__ == "__main__":
         ws_port=args.ws_port,
         telemetry_ws_port=args.telemetry_ws_port,
         node_id=args.node_id,
-        telemetry_interval=args.telemetry_interval
+        telemetry_interval=args.telemetry_interval,
+        heartbeat_interval=args.heartbeat_interval
     )
     daemon.start()
     app = make_app(daemon)
@@ -429,6 +465,7 @@ if __name__ == "__main__":
     logger.info(f"Livelogs WebSocket port: {args.ws_port}")
     logger.info(f"Telemetry WebSocket port: {args.telemetry_ws_port}")
     logger.info(f"Telemetry interval: {args.telemetry_interval}s")
+    logger.info(f"Heartbeat interval: {args.heartbeat_interval}s")
     logger.info(f"Log file: /var/log/resolvix.log")
     try:
         # do not use debug in production
