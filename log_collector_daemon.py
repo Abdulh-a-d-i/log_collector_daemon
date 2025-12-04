@@ -161,16 +161,24 @@ class LogCollectorDaemon:
     def _heartbeat_loop(self):
         """Send periodic heartbeat to backend"""
         logger.info("Heartbeat loop started")
+        
+        # Extract base URL (remove /api/ticket if present)
+        if self.api_url:
+            base_url = self.api_url.replace('/api/ticket', '').replace('/api/logs', '')
+            heartbeat_url = f"{base_url}/api/heartbeat"
+        else:
+            heartbeat_url = None
+        
         while not self._stop_flag.is_set():
             try:
-                if self.api_url:
+                if heartbeat_url:
                     payload = {
                         "node_id": self.node_id,
                         "status": "online",
                         "timestamp": datetime.utcnow().isoformat() + "Z"
                     }
                     try:
-                        resp = requests.post(f"{self.api_url}/heartbeat", json=payload, timeout=5)
+                        resp = requests.post(heartbeat_url, json=payload, timeout=5)
                         if resp.status_code >= 400:
                             logger.warning(f"Heartbeat failed: {resp.status_code}")
                     except Exception as e:

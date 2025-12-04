@@ -39,25 +39,64 @@ chmod +x livelogs.py log_collector_daemon.py system_info.py
 
   # run system_info.py
   python3 system_info.py
+  
+  if [ ! -f "system_info.json" ]; then
+    echo "❌ [Installer] ERROR: system_info.json not created!"
+    exit 1
+  fi
+  
+  echo "[Installer] System info collected successfully"
+  echo "[Installer] System info file size: $(wc -c < system_info.json) bytes"
 
-  # send payload to API
-  NEXTJS_API_URL="http://13.235.113.192:3000/api/system_info"
-  echo "[Installer] Sending system info to API: $NEXTJS_API_URL"
+  # send payload to API (extract base URL from API_URL)
+  BASE_API_URL="${API_URL%/api/ticket}"
+  SYSTEM_INFO_URL="${BASE_API_URL}/api/system_info"
+  echo "[Installer] Sending system info to: $SYSTEM_INFO_URL"
   python3 - <<EOF
 import requests
 import json
-with open("system_info.json", "r") as f:
-    system_info = json.load(f)
+import sys
 
 try:
-    resp = requests.post("$NEXTJS_API_URL", json=system_info)
-    if resp.status_code == 200:
+    with open("system_info.json", "r") as f:
+        system_info = json.load(f)
+    
+    print(f"[Installer] Payload keys: {list(system_info.keys())}")
+    print(f"[Installer] Sending POST request to: $SYSTEM_INFO_URL")
+    
+    resp = requests.post("$SYSTEM_INFO_URL", json=system_info, timeout=10)
+    
+    print(f"[Installer] Response status: {resp.status_code}")
+    print(f"[Installer] Response body: {resp.text[:200]}")
+    
+    if resp.status_code == 200 or resp.status_code == 201:
         print("✅ System info sent successfully")
+        sys.exit(0)
     else:
-        print("❌ Failed to send system info:", resp.text)
+        print(f"❌ Failed to send system info: HTTP {resp.status_code}")
+        print(f"Response: {resp.text}")
+        sys.exit(1)
+except FileNotFoundError:
+    print("❌ Error: system_info.json not found")
+    sys.exit(1)
+except requests.exceptions.Timeout:
+    print("❌ Error: Request timeout after 10 seconds")
+    sys.exit(1)
+except requests.exceptions.ConnectionError as e:
+    print(f"❌ Error: Cannot connect to backend: {e}")
+    sys.exit(1)
 except Exception as e:
-    print("❌ Error sending system info:", e)
+    print(f"❌ Error sending system info: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
 EOF
+  
+  SYSTEM_INFO_EXIT_CODE=$?
+  if [ $SYSTEM_INFO_EXIT_CODE -ne 0 ]; then
+    echo "❌ [Installer] WARNING: Failed to send system info (exit code: $SYSTEM_INFO_EXIT_CODE)"
+    echo "[Installer] Continuing with installation..."
+  fi
 
   # create flag file so it doesn't run again
   # sudo touch "$FLAG_FILE"
