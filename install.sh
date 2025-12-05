@@ -1,9 +1,10 @@
 #!/bin/bash
 set -e
 echo "[Installer] Starting installation..."
-# Accept log file path and API URL as arguments
+# Accept log file path, API URL, and backend SSH key as arguments
 LOG_FILE="$1"
 API_URL="$2"
+BACKEND_PUBLIC_KEY="$3"  # NEW: Backend's SSH public key for file browser
 
 # Provide defaults if arguments are missing
 LOG_FILE=${LOG_FILE:-/var/log/syslog}
@@ -11,6 +12,52 @@ API_URL=${API_URL:-http://13.235.113.192:3000/api/ticket}
 
 echo "[Installer] Log file: $LOG_FILE"
 echo "[Installer] API URL: $API_URL"
+if [ -n "$BACKEND_PUBLIC_KEY" ]; then
+  echo "[Installer] SSH key provided: ${BACKEND_PUBLIC_KEY:0:50}..."
+else
+  echo "[Installer] No SSH key provided (file browser will not work)"
+fi
+
+# ============================================
+# File Browser Setup Functions
+# ============================================
+
+create_file_browser_user() {
+    echo "[Installer] 🔐 Setting up file browser access..."
+    
+    if ! id "log-horizon-observer" &>/dev/null; then
+        sudo useradd -r -s /usr/sbin/nologin -d /opt/log-horizon log-horizon-observer
+        echo "[Installer] ✅ Created log-horizon-observer user"
+    else
+        echo "[Installer] ✅ User log-horizon-observer already exists"
+    fi
+    
+    sudo usermod -aG adm log-horizon-observer
+    echo "[Installer] ✅ Added to 'adm' group for /var/log access"
+}
+
+setup_ssh_access() {
+    echo "[Installer] 🔑 Configuring SSH access for backend..."
+    
+    sudo mkdir -p /opt/log-horizon/.ssh
+    sudo chmod 700 /opt/log-horizon/.ssh
+    
+    if [ -n "$BACKEND_PUBLIC_KEY" ]; then
+        echo "$BACKEND_PUBLIC_KEY" | sudo tee /opt/log-horizon/.ssh/authorized_keys > /dev/null
+        sudo chmod 600 /opt/log-horizon/.ssh/authorized_keys
+        sudo chown -R log-horizon-observer:log-horizon-observer /opt/log-horizon
+        echo "[Installer] ✅ SSH access configured"
+    else
+        echo "[Installer] ⚠️  Warning: No SSH public key provided, file browser will not work"
+    fi
+}
+
+# ============================================
+# Setup File Browser Access
+# ============================================
+
+create_file_browser_user
+setup_ssh_access
 
 # packages for Debian/Ubuntu
 sudo apt update -y
@@ -147,3 +194,9 @@ sudo systemctl restart $SERVICE_NAME
 
 echo "[Installer] Installation complete. Daemon should be running."
 echo "[Info] WebSocket endpoint: ws://<NODE_IP>:8755/logs"
+echo "[Info] File browser user: log-horizon-observer"
+if [ -n "$BACKEND_PUBLIC_KEY" ]; then
+  echo "[Info] SSH access: Enabled"
+else
+  echo "[Info] SSH access: Disabled (no key provided)"
+fi
