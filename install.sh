@@ -83,6 +83,8 @@ fi
 # upgrade pip and install dependencies
 pip install --upgrade pip
 pip install websockets psutil requests flask_cors
+pip install pika
+
 
 # make scripts executable
 chmod +x livelogs.py log_collector_daemon.py system_info.py
