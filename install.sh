@@ -1,17 +1,24 @@
 #!/bin/bash
 set -e
 echo "[Installer] Starting installation..."
-# Accept log file path, API URL, and backend SSH key as arguments
+# Accept parameters from backend
 LOG_FILE="$1"
 API_URL="$2"
-BACKEND_PUBLIC_KEY="$3"  # NEW: Backend's SSH public key for file browser
+SYSTEM_INFO_URL="$3"
+AUTH_TOKEN="$4"
+BACKEND_PUBLIC_KEY="$5"  # Backend's SSH public key for file browser
 
 # Provide defaults if arguments are missing
 LOG_FILE=${LOG_FILE:-/var/log/syslog}
 API_URL=${API_URL:-http://13.235.113.192:3000/api/ticket}
+SYSTEM_INFO_URL=${SYSTEM_INFO_URL:-http://13.235.113.192:3000/api/system_info}
 
 echo "[Installer] Log file: $LOG_FILE"
 echo "[Installer] API URL: $API_URL"
+echo "[Installer] System Info URL: $SYSTEM_INFO_URL"
+if [ -n "$AUTH_TOKEN" ]; then
+  echo "[Installer] Auth token: ${AUTH_TOKEN:0:20}..."
+fi
 if [ -n "$BACKEND_PUBLIC_KEY" ]; then
   echo "[Installer] SSH key provided: ${BACKEND_PUBLIC_KEY:0:50}..."
 else
@@ -25,28 +32,30 @@ fi
 create_file_browser_user() {
     echo "[Installer] 🔐 Setting up file browser access..."
     
-    if ! id "log-horizon-observer" &>/dev/null; then
-        sudo useradd -r -s /usr/sbin/nologin -d /opt/log-horizon log-horizon-observer
-        echo "[Installer] ✅ Created log-horizon-observer user"
+    if ! id "resolvix" &>/dev/null; then
+        sudo useradd -m -s /bin/bash resolvix
+        echo "[Installer] ✅ Created resolvix user"
     else
-        echo "[Installer] ✅ User log-horizon-observer already exists"
+        echo "[Installer] ✅ User resolvix already exists"
     fi
     
-    sudo usermod -aG adm log-horizon-observer
+    sudo usermod -aG adm resolvix
     echo "[Installer] ✅ Added to 'adm' group for /var/log access"
 }
 
 setup_ssh_access() {
     echo "[Installer] 🔑 Configuring SSH access for backend..."
     
-    sudo mkdir -p /opt/log-horizon/.ssh
-    sudo chmod 700 /opt/log-horizon/.ssh
+    RESOLVIX_HOME=$(eval echo ~resolvix)
+    
+    sudo mkdir -p $RESOLVIX_HOME/.ssh
+    sudo chmod 700 $RESOLVIX_HOME/.ssh
     
     if [ -n "$BACKEND_PUBLIC_KEY" ]; then
-        echo "$BACKEND_PUBLIC_KEY" | sudo tee /opt/log-horizon/.ssh/authorized_keys > /dev/null
-        sudo chmod 600 /opt/log-horizon/.ssh/authorized_keys
-        sudo chown -R log-horizon-observer:log-horizon-observer /opt/log-horizon
-        echo "[Installer] ✅ SSH access configured"
+        echo "$BACKEND_PUBLIC_KEY" | sudo tee -a $RESOLVIX_HOME/.ssh/authorized_keys > /dev/null
+        sudo chmod 600 $RESOLVIX_HOME/.ssh/authorized_keys
+        sudo chown -R resolvix:resolvix $RESOLVIX_HOME/.ssh
+        echo "[Installer] ✅ SSH access configured for resolvix user"
     else
         echo "[Installer] ⚠️  Warning: No SSH public key provided, file browser will not work"
     fi
@@ -95,9 +104,7 @@ chmod +x livelogs.py log_collector_daemon.py system_info.py
   echo "[Installer] System info collected successfully"
   echo "[Installer] System info file size: $(wc -c < system_info.json) bytes"
 
-  # send payload to API (extract base URL from API_URL)
-  BASE_API_URL="${API_URL%/api/ticket}"
-  SYSTEM_INFO_URL="${BASE_API_URL}/api/system_info"
+  # send payload to API
   echo "[Installer] Sending system info to: $SYSTEM_INFO_URL"
   python3 - <<EOF
 import requests
@@ -111,7 +118,11 @@ try:
     print(f"[Installer] Payload keys: {list(system_info.keys())}")
     print(f"[Installer] Sending POST request to: $SYSTEM_INFO_URL")
     
-    resp = requests.post("$SYSTEM_INFO_URL", json=system_info, timeout=10)
+    headers = {}
+    if "$AUTH_TOKEN":
+        headers["Authorization"] = f"Bearer $AUTH_TOKEN"
+    
+    resp = requests.post("$SYSTEM_INFO_URL", json=system_info, headers=headers, timeout=10)
     
     print(f"[Installer] Response status: {resp.status_code}")
     print(f"[Installer] Response body: {resp.text[:200]}")
@@ -194,9 +205,10 @@ sudo systemctl restart $SERVICE_NAME
 
 echo "[Installer] Installation complete. Daemon should be running."
 echo "[Info] WebSocket endpoint: ws://<NODE_IP>:8755/logs"
-echo "[Info] File browser user: log-horizon-observer"
+echo "[Info] File browser user: resolvix"
 if [ -n "$BACKEND_PUBLIC_KEY" ]; then
-  echo "[Info] SSH access: Enabled"
+  echo "[Info] SSH access: Enabled for resolvix user"
+  echo "[Info] Test: ssh -i ~/.ssh/resolvix_rsa resolvix@<NODE_IP> 'ls /var/log'"
 else
   echo "[Info] SSH access: Disabled (no key provided)"
 fi
