@@ -18,7 +18,38 @@ import subprocess
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
+import pika
+import json
 
+RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672";
+QUEUE_NAME = "error_logs_queue";
+
+def send_to_rabbitmq(payload):
+    try:
+        # Parse connection URL
+        params = pika.URLParameters(RABBITMQ_URL)
+        connection = pika.BlockingConnection(params)
+        channel = connection.channel()
+        
+        # Declare queue
+        channel.queue_declare(queue=QUEUE_NAME, durable=True)
+        
+        # Send message
+        channel.basic_publish(
+            exchange='',
+            routing_key=QUEUE_NAME,
+            body=json.dumps(payload),
+            properties=pika.BasicProperties(
+                delivery_mode=2,  # Make message persistent
+            )
+        )
+        
+        connection.close()
+        logger.info("✅ Log sent to RabbitMQ")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to send to RabbitMQ: {e}")
+        return False
 # Setup logging
 LOG_FILE = "/var/log/resolvix.log"
 try:
@@ -223,14 +254,11 @@ class LogCollectorDaemon:
                         logger.info(f"Error detected [{severity}]: {line.strip()[:100]}")
                         # best-effort post; don't crash daemon if fails
                         if self.api_url:
-                            try:
-                                resp = requests.post(f"{self.api_url}/logs", json=payload, timeout=5)
-                                if resp.status_code >= 400:
-                                    logger.error(f"API POST failed with status {resp.status_code}")
-                                else:
-                                    logger.debug(f"Error log sent to API successfully")
-                            except Exception as e:
-                                logger.error(f"Error posting to API: {e}")
+                            success = send_to_rabbitmq(payload)
+                            if success:
+                                logger.info(f"✅ Error log sent to RabbitMQ successfully")
+                            else:
+                                logger.error(f"❌ Failed to send log to RabbitMQ")
                         else:
                             logger.info(f"No API configured, logging locally: {json.dumps(payload)}")
         except Exception as e:
