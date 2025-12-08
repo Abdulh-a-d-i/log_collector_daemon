@@ -20,6 +20,12 @@ import logging
 from logging.handlers import RotatingFileHandler
 import pika
 import json
+try:
+    from alert_manager import AlertManager
+    ALERT_MANAGER_AVAILABLE = True
+except ImportError:
+    ALERT_MANAGER_AVAILABLE = False
+    logger.warning("Alert manager not available - alerts disabled")
 
 RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672";
 QUEUE_NAME = "error_logs_queue";
@@ -159,6 +165,22 @@ class LogCollectorDaemon:
         # compiled keyword regex for faster matching
         kw = "|".join(re.escape(k) for k in ERROR_KEYWORDS)
         self._err_re = re.compile(rf"\b({kw})\b", re.IGNORECASE)
+        
+        # Initialize Alert Manager
+        if ALERT_MANAGER_AVAILABLE:
+            try:
+                self.alert_manager = AlertManager(
+                    backend_url=self.api_url,
+                    hostname=socket.gethostname(),
+                    ip_address=self.node_id
+                )
+                logger.info("[AlertManager] Smart alerting enabled")
+            except Exception as e:
+                logger.error(f"[AlertManager] Failed to initialize: {e}")
+                self.alert_manager = None
+        else:
+            self.alert_manager = None
+            logger.info("[AlertManager] Disabled (module not available)")
 
     def start(self):
         # starts background thread for monitoring

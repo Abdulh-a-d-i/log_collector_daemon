@@ -13,6 +13,15 @@ import argparse
 from datetime import datetime
 import psutil
 import time
+import socket
+
+# Import AlertManager with fallback
+try:
+    from alert_manager import AlertManager
+    ALERT_MANAGER_AVAILABLE = True
+except ImportError:
+    ALERT_MANAGER_AVAILABLE = False
+    print("[telemetry-ws] Warning: Alert manager not available - alerts disabled")
 
 class TelemetryCollector:
     """Collects system telemetry metrics"""
@@ -24,6 +33,21 @@ class TelemetryCollector:
         self._last_disk = None
         self._last_time = None
         
+        # Initialize Alert Manager
+        if ALERT_MANAGER_AVAILABLE and api_url:
+            try:
+                self.alert_manager = AlertManager(
+                    backend_url=api_url,
+                    hostname=socket.gethostname(),
+                    ip_address=node_id
+                )
+                print("[telemetry-ws] Alert manager enabled")
+            except Exception as e:
+                print(f"[telemetry-ws] Failed to initialize alert manager: {e}")
+                self.alert_manager = None
+        else:
+            self.alert_manager = None
+        
     def collect_all_metrics(self):
         """Collect all system metrics"""
         try:
@@ -32,6 +56,27 @@ class TelemetryCollector:
             disk = self._collect_disk()
             network = self._collect_network()
             processes = self._collect_processes()
+            
+            # Check alerts if manager is available
+            if self.alert_manager:
+                try:
+                    self.alert_manager.check_cpu_alert(cpu['cpu_usage_percent'])
+                    self.alert_manager.check_memory_alert(memory['memory_usage_percent'])
+                    
+                    # Check root disk partition
+                    if '/' in disk['disk_usage']:
+                        self.alert_manager.check_disk_alert(disk['disk_usage']['/']['usage_percent'])
+                    
+                    # Check process count
+                    self.alert_manager.check_process_count(processes['process_count'])
+                    
+                    # Check network spikes
+                    self.alert_manager.check_network_spike(
+                        network['bytes_sent_mb_per_sec'],
+                        network['bytes_recv_mb_per_sec']
+                    )
+                except Exception as e:
+                    print(f"[telemetry-ws] Alert check error: {e}")
             
             return {
                 "timestamp": datetime.utcnow().isoformat() + "Z",
