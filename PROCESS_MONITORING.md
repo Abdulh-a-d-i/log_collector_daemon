@@ -9,11 +9,13 @@ The daemon now includes **detailed process-level monitoring** capabilities that 
 ## 🎯 Features
 
 ### **1. Top Process Tracking**
+
 - Top 10 processes by CPU usage
 - Top 10 processes by RAM usage
 - Real-time metrics updated every collection cycle
 
 ### **2. Detailed Process Information**
+
 - Process ID (PID), name, and owner
 - CPU and memory usage
 - Process status (running, sleeping, zombie, etc.)
@@ -22,18 +24,21 @@ The daemon now includes **detailed process-level monitoring** capabilities that 
 - Parent-child relationships (process tree)
 
 ### **3. Historical Data**
+
 - Track process metrics over time
 - Up to 1000 snapshots per process
 - Calculate average and peak usage
 - Configurable time windows (1-48 hours)
 
 ### **4. Process Management**
+
 - Terminate processes remotely
 - Graceful termination (SIGTERM) or force kill (SIGKILL)
 - Automatic fallback to force kill if graceful fails
 - Permission-based access control
 
 ### **5. Process Tree Visualization**
+
 - View parent process
 - View all child processes (recursive)
 - Identify process relationships
@@ -43,9 +48,11 @@ The daemon now includes **detailed process-level monitoring** capabilities that 
 ## 📡 API Endpoints
 
 ### **GET /api/processes**
+
 Get current top processes by CPU and RAM usage
 
 **Response:**
+
 ```json
 {
   "timestamp": "2025-12-11T10:30:45.123Z",
@@ -75,11 +82,13 @@ Get current top processes by CPU and RAM usage
 ---
 
 ### **GET /api/processes/{pid}**
+
 Get detailed information about a specific process
 
 **Example:** `GET /api/processes/1234`
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -103,6 +112,7 @@ Get detailed information about a specific process
 ```
 
 **Error Response (404):**
+
 ```json
 {
   "success": false,
@@ -114,11 +124,13 @@ Get detailed information about a specific process
 ---
 
 ### **POST /api/processes/{pid}/kill**
+
 Terminate a process
 
 **Example:** `POST /api/processes/1234/kill`
 
 **Request Body:**
+
 ```json
 {
   "force": false
@@ -126,9 +138,11 @@ Terminate a process
 ```
 
 **Parameters:**
+
 - `force` (boolean): Use SIGKILL (true) or SIGTERM (false, default)
 
 **Success Response (200):**
+
 ```json
 {
   "success": true,
@@ -140,6 +154,7 @@ Terminate a process
 ```
 
 **Error Response (400):**
+
 ```json
 {
   "success": false,
@@ -151,14 +166,17 @@ Terminate a process
 ---
 
 ### **GET /api/processes/{pid}/history**
+
 Get historical metrics for a process
 
 **Example:** `GET /api/processes/1234/history?hours=24`
 
 **Query Parameters:**
+
 - `hours` (integer): Time window in hours (default: 24)
 
 **Response:**
+
 ```json
 {
   "pid": 1234,
@@ -191,11 +209,13 @@ Get historical metrics for a process
 ---
 
 ### **GET /api/processes/{pid}/tree**
+
 Get process tree (parent and children)
 
 **Example:** `GET /api/processes/1234/tree`
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -268,6 +288,7 @@ curl http://localhost:8754/api/processes | jq '.top_cpu[] | {pid, name, cpu_perc
 ```
 
 **Output:**
+
 ```json
 {
   "pid": 1234,
@@ -308,6 +329,7 @@ curl "http://localhost:8754/api/processes/1234/history?hours=6" | jq '.statistic
 ```
 
 **Output:**
+
 ```json
 {
   "avg_cpu": 78.3,
@@ -336,11 +358,13 @@ curl http://localhost:8754/api/processes | jq '.top_cpu[] | select(.status == "z
 ### **Process Termination Permissions**
 
 **Who can kill processes:**
+
 - Daemon runs as configured user (typically root)
 - Can only kill processes owned by that user
 - System processes may require root privileges
 
 **Best Practices:**
+
 1. Run daemon as dedicated user with limited privileges
 2. Use sudo/root only when necessary
 3. Implement authentication on API endpoints (reverse proxy)
@@ -407,16 +431,19 @@ def store_process_metrics(metrics):
 ### **Process Monitoring Not Available**
 
 **Check:**
+
 ```bash
 grep "ProcessMonitor" /var/log/resolvix.log
 ```
 
 **Expected:**
+
 ```
 [ProcessMonitor] Process monitoring enabled
 ```
 
 **If disabled:**
+
 - Ensure `process_monitor.py` exists in daemon directory
 - Restart daemon: `sudo systemctl restart resolvix`
 
@@ -427,6 +454,7 @@ grep "ProcessMonitor" /var/log/resolvix.log
 **Issue:** Cannot kill certain processes
 
 **Solution:**
+
 ```bash
 # Option 1: Run daemon as root (not recommended for production)
 sudo systemctl edit resolvix
@@ -443,6 +471,7 @@ sudo setcap 'cap_kill=+ep' /path/to/python
 **Issue:** Process history returns empty
 
 **Causes:**
+
 - Process monitoring recently enabled
 - Process hasn't been running long enough
 - Process was cleaned up (>48 hours old)
@@ -458,18 +487,21 @@ sudo setcap 'cap_kill=+ep' /path/to/python
 ```javascript
 // Fetch top processes
 const fetchProcesses = async () => {
-  const response = await fetch('http://agent-ip:8754/api/processes');
+  const response = await fetch("http://agent-ip:8754/api/processes");
   const data = await response.json();
   setProcesses(data.top_cpu);
 };
 
 // Kill process
 const killProcess = async (pid, force = false) => {
-  const response = await fetch(`http://agent-ip:8754/api/processes/${pid}/kill`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ force })
-  });
+  const response = await fetch(
+    `http://agent-ip:8754/api/processes/${pid}/kill`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    }
+  );
   const result = await response.json();
   if (result.success) {
     alert(`Process ${pid} terminated`);
@@ -485,11 +517,11 @@ const killProcess = async (pid, force = false) => {
 
 ### **Resource Usage**
 
-| Metric | Impact |
-|--------|--------|
-| CPU | <1% additional |
-| Memory | ~10-50 MB (depends on process count) |
-| Network | Minimal (only when API called) |
+| Metric  | Impact                               |
+| ------- | ------------------------------------ |
+| CPU     | <1% additional                       |
+| Memory  | ~10-50 MB (depends on process count) |
+| Network | Minimal (only when API called)       |
 
 ### **Collection Frequency**
 
@@ -514,13 +546,13 @@ const killProcess = async (pid, force = false) => {
 
 ## 📚 API Summary
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/processes` | GET | Get top processes |
-| `/api/processes/{pid}` | GET | Get process details |
-| `/api/processes/{pid}/kill` | POST | Kill process |
-| `/api/processes/{pid}/history` | GET | Get historical data |
-| `/api/processes/{pid}/tree` | GET | Get process tree |
+| Endpoint                       | Method | Purpose             |
+| ------------------------------ | ------ | ------------------- |
+| `/api/processes`               | GET    | Get top processes   |
+| `/api/processes/{pid}`         | GET    | Get process details |
+| `/api/processes/{pid}/kill`    | POST   | Kill process        |
+| `/api/processes/{pid}/history` | GET    | Get historical data |
+| `/api/processes/{pid}/tree`    | GET    | Get process tree    |
 
 ---
 
