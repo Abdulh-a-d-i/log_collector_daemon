@@ -446,7 +446,7 @@ def make_app(daemon: LogCollectorDaemon):
     app = Flask(__name__)
     CORS(app, origins="*")  # Allow all origins
 
-    @app.route("/control", methods=["POST"])
+    @app.route("/api/control", methods=["POST"])
     def control():
         data = request.get_json(force=True)
         cmd = data.get("command")
@@ -490,14 +490,14 @@ def make_app(daemon: LogCollectorDaemon):
         logger.warning(f"Unknown command: {cmd}")
         return jsonify({"status": "unknown_command"}), HTTPStatus.BAD_REQUEST
 
-    @app.route("/health", methods=["GET"])
+    @app.route("/api/health", methods=["GET"])
     def health():
         return jsonify({
             "status": "ok", 
             "node_id": daemon.node_id
         }), HTTPStatus.OK
     
-    @app.route("/status", methods=["GET"])
+    @app.route("/api/status", methods=["GET"])
     def status():
         return jsonify(daemon.get_status()), HTTPStatus.OK
     
