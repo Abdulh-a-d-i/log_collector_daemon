@@ -41,11 +41,8 @@ class ProcessMonitor:
             try:
                 pinfo = proc.info
                 
-                # Calculate CPU percent with short interval
-                try:
-                    cpu_percent = proc.cpu_percent(interval=0.1)
-                except:
-                    cpu_percent = pinfo.get('cpu_percent', 0) or 0
+                # Use cached CPU percent (non-blocking)
+                cpu_percent = pinfo.get('cpu_percent', 0) or 0
                 
                 process_data = {
                     'pid': pinfo['pid'],
