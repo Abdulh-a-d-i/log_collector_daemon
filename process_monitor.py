@@ -28,10 +28,16 @@ class ProcessMonitor:
         self.process_history = defaultdict(list)  # pid -> list of snapshots
         self.last_collection_time = None
         
-    def get_process_metrics(self):
+    def get_process_metrics(self, limit=30, sort_by='cpu'):
         """
-        Collect top 10 processes by CPU and RAM usage
-        Returns detailed process information
+        Collect top N processes sorted by CPU or memory usage
+        
+        Args:
+            limit: Number of processes to return (default: 30, max: 100)
+            sort_by: Sort criterion - 'cpu' or 'memory' (default: 'cpu')
+            
+        Returns:
+            dict with processes array and system stats
         """
         processes = []
         
@@ -72,18 +78,34 @@ class ProcessMonitor:
             except Exception as e:
                 logger.debug(f"Issue collecting process data: {e}")
         
-        # Sort by CPU (top 10) and RAM (top 10)
-        top_cpu = sorted(processes, key=lambda x: x['cpu_percent'], reverse=True)[:10]
-        top_ram = sorted(processes, key=lambda x: x['memory_percent'], reverse=True)[:10]
+        # Sort by CPU or memory
+        if sort_by == 'memory':
+            processes.sort(key=lambda x: x['memory_percent'], reverse=True)
+        else:
+            processes.sort(key=lambda x: x['cpu_percent'], reverse=True)
+        
+        # Get top N processes
+        top_processes = processes[:limit]
         
         self.last_collection_time = datetime.now()
         
+        # Get system stats
+        try:
+            cpu_percent = psutil.cpu_percent(interval=0)
+            memory_percent = psutil.virtual_memory().percent
+        except:
+            cpu_percent = 0
+            memory_percent = 0
+        
         return {
             'timestamp': datetime.now().isoformat(),
-            'top_cpu': top_cpu,
-            'top_ram': top_ram,
-            'total_processes': len(processes),
-            'zombie_count': sum(1 for p in processes if p['status'] == 'zombie')
+            'processes': top_processes,
+            'system_stats': {
+                'cpu_percent': round(cpu_percent, 2),
+                'memory_percent': round(memory_percent, 2),
+                'total_processes': len(processes),
+                'zombie_count': sum(1 for p in processes if p['status'] == 'zombie')
+            }
         }
     
     def get_process_details(self, pid):

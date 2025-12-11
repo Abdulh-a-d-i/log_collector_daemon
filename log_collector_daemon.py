@@ -504,12 +504,23 @@ def make_app(daemon: LogCollectorDaemon):
     # -------- Process Monitoring Endpoints --------
     @app.route("/api/processes", methods=["GET"])
     def get_processes():
-        """GET /api/processes - Returns current top processes by CPU and RAM"""
+        """GET /api/processes - Returns current top processes sorted by CPU or memory"""
         if not daemon.process_monitor:
             return jsonify({"error": "Process monitoring not available"}), HTTPStatus.SERVICE_UNAVAILABLE
         
         try:
-            metrics = daemon.process_monitor.get_process_metrics()
+            # Get query parameters
+            limit = request.args.get('limit', 30, type=int)
+            sort_by = request.args.get('sortBy', 'cpu', type=str)
+            
+            # Validate parameters
+            if limit < 1 or limit > 100:
+                return jsonify({"error": "Limit must be between 1 and 100"}), HTTPStatus.BAD_REQUEST
+            
+            if sort_by not in ['cpu', 'memory']:
+                sort_by = 'cpu'
+            
+            metrics = daemon.process_monitor.get_process_metrics(limit=limit, sort_by=sort_by)
             return jsonify(metrics), HTTPStatus.OK
         except Exception as e:
             logger.error(f"Failed to get process metrics: {e}")
