@@ -1,6 +1,7 @@
 # Daemon Connection Troubleshooting Guide
 
 ## 🔴 Current Issue
+
 Backend timing out when connecting to daemon at `http://10.215.111.191:8754`
 
 ```
@@ -82,6 +83,7 @@ sudo lsof -i :8754
 ```
 
 **If port is NOT listening:**
+
 - Daemon is not running or crashed
 - Check logs: `sudo tail -n 200 /var/log/resolvix.log`
 - Check for port conflicts: `sudo lsof -i :8754`
@@ -105,6 +107,7 @@ curl http://localhost:8754/api/processes | jq
 ```
 
 **If curl fails:**
+
 - Daemon crashed → Check logs
 - Flask not binding properly → Check daemon configuration
 - Python dependencies missing → Reinstall
@@ -127,6 +130,7 @@ curl http://10.215.111.191:8754/api/health
 ```
 
 **If connection times out:**
+
 - Firewall blocking → See Step 5
 - Wrong IP address → Verify node IP
 - Network routing issue → Check VPN/network config
@@ -185,6 +189,7 @@ sudo grep -i "port\|8754" /var/log/resolvix.log
 ```
 
 **Port configuration in daemon:**
+
 - Default port: **8754** (hardcoded in `DEFAULT_CONTROL_PORT`)
 - Can be overridden with `--control-port` flag
 - Binds to `0.0.0.0` (all interfaces)
@@ -197,28 +202,28 @@ sudo grep -i "port\|8754" /var/log/resolvix.log
 
 ```javascript
 // test-daemon-connection.js
-const axios = require('axios');
+const axios = require("axios");
 
 const testDaemonConnection = async (nodeIp) => {
   const daemonUrl = `http://${nodeIp}:8754/api/health`;
-  
+
   console.log(`Testing connection to: ${daemonUrl}`);
-  
+
   try {
     const response = await axios.get(daemonUrl, { timeout: 5000 });
-    console.log('✅ SUCCESS:', response.status, response.data);
+    console.log("✅ SUCCESS:", response.status, response.data);
   } catch (error) {
-    console.error('❌ FAILED:', error.code, error.message);
-    
-    if (error.code === 'ECONNREFUSED') {
-      console.log('→ Daemon not running or port not open');
-    } else if (error.code === 'ETIMEDOUT') {
-      console.log('→ Firewall blocking or network issue');
+    console.error("❌ FAILED:", error.code, error.message);
+
+    if (error.code === "ECONNREFUSED") {
+      console.log("→ Daemon not running or port not open");
+    } else if (error.code === "ETIMEDOUT") {
+      console.log("→ Firewall blocking or network issue");
     }
   }
 };
 
-testDaemonConnection('10.215.111.191');
+testDaemonConnection("10.215.111.191");
 ```
 
 ---
@@ -230,6 +235,7 @@ testDaemonConnection('10.215.111.191');
 **Symptom:** SSH to node, no daemon files found
 
 **Solution:**
+
 ```bash
 # Install daemon on the node
 cd /opt
@@ -245,6 +251,7 @@ sudo ./install.sh /var/log/syslog http://your-backend:3000/api/ticket
 **Symptom:** `systemctl status resolvix` → Unit not found
 
 **Solution:**
+
 ```bash
 cd /opt/resolvix-daemon
 
@@ -280,6 +287,7 @@ sudo systemctl start resolvix
 **Symptom:** Daemon crashes immediately, logs show `ModuleNotFoundError`
 
 **Solution:**
+
 ```bash
 cd /opt/resolvix-daemon
 source venv/bin/activate
@@ -294,6 +302,7 @@ sudo systemctl restart resolvix
 **Symptom:** Daemon fails to start, logs show `Address already in use`
 
 **Solution:**
+
 ```bash
 # Find process using port 8754
 sudo lsof -i :8754
@@ -316,6 +325,7 @@ sudo systemctl restart resolvix
 **Symptom:** Port listening, but HTTP requests hang
 
 **Solution:**
+
 ```bash
 # Check if daemon is stuck
 sudo strace -p $(pgrep -f log_collector_daemon) -e trace=network
@@ -389,6 +399,7 @@ echo "==================================="
 ```
 
 **Run it:**
+
 ```bash
 chmod +x diagnose-daemon.sh
 sudo ./diagnose-daemon.sh
@@ -398,16 +409,16 @@ sudo ./diagnose-daemon.sh
 
 ## 📊 Expected Daemon Endpoints
 
-| Endpoint | Method | Purpose | Expected Response |
-|----------|--------|---------|-------------------|
-| `/api/health` | GET | Health check | `{"status": "ok", "node_id": "..."}` |
-| `/api/status` | GET | Daemon status | `{node_id, log_file, livelogs, telemetry}` |
-| `/api/control` | POST | Control daemon | `{"command": "start_livelogs/stop_livelogs"}` |
-| `/api/processes` | GET | List top processes | `[{pid, name, cpu, memory...}]` |
-| `/api/processes/:pid` | GET | Process details | `{pid, name, status...}` |
-| `/api/processes/:pid/kill` | POST | Kill process | `{"success": true, "message": "..."}` |
-| `/api/processes/:pid/history` | GET | Process history | `[{timestamp, cpu, memory...}]` |
-| `/api/processes/:pid/tree` | GET | Process tree | `{parent, children: [...]}` |
+| Endpoint                      | Method | Purpose            | Expected Response                             |
+| ----------------------------- | ------ | ------------------ | --------------------------------------------- |
+| `/api/health`                 | GET    | Health check       | `{"status": "ok", "node_id": "..."}`          |
+| `/api/status`                 | GET    | Daemon status      | `{node_id, log_file, livelogs, telemetry}`    |
+| `/api/control`                | POST   | Control daemon     | `{"command": "start_livelogs/stop_livelogs"}` |
+| `/api/processes`              | GET    | List top processes | `[{pid, name, cpu, memory...}]`               |
+| `/api/processes/:pid`         | GET    | Process details    | `{pid, name, status...}`                      |
+| `/api/processes/:pid/kill`    | POST   | Kill process       | `{"success": true, "message": "..."}`         |
+| `/api/processes/:pid/history` | GET    | Process history    | `[{timestamp, cpu, memory...}]`               |
+| `/api/processes/:pid/tree`    | GET    | Process tree       | `{parent, children: [...]}`                   |
 
 ---
 
@@ -432,19 +443,19 @@ Once daemon is running, verify **in this order:**
 {
   echo "=== Service Status ==="
   systemctl status resolvix
-  
+
   echo -e "\n=== Port Binding ==="
   sudo ss -tulpn | grep 8754
-  
+
   echo -e "\n=== Daemon Logs (last 50 lines) ==="
   sudo tail -n 50 /var/log/resolvix.log
-  
+
   echo -e "\n=== Process Info ==="
   ps aux | grep log_collector_daemon
-  
+
   echo -e "\n=== Firewall Rules ==="
   sudo iptables -L INPUT -n -v | grep 8754
-  
+
 } > daemon-diagnostics.txt
 
 cat daemon-diagnostics.txt

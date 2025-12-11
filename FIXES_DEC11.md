@@ -3,11 +3,13 @@
 ## 🔧 Issues Fixed
 
 ### 1. **HTTP 404 Error on Health Check** ✅
+
 **Problem:** Daemon returned 404 for `/api/health` endpoint
 
 **Root Cause:** Health endpoint was at `/health` (missing `/api/` prefix)
 
 **Fix:** Updated all legacy routes to use `/api/` prefix for consistency:
+
 - `/control` → `/api/control`
 - `/health` → `/api/health`
 - `/status` → `/api/status`
@@ -17,11 +19,13 @@
 ---
 
 ### 2. **Diagnostic Script Path Detection** ✅
+
 **Problem:** Script looked for venv at hardcoded `/opt/resolvix-daemon/venv` but daemon was installed at `/root/log_collector_daemon/`
 
 **Root Cause:** Script didn't detect actual daemon installation directory
 
 **Fix:** Auto-detect daemon directory from running process:
+
 ```bash
 DAEMON_DIR=$(ps aux | grep -oP 'python3?\s+\K[^\s]+(?=/log_collector_daemon\.py)' | head -1 | xargs dirname 2>/dev/null)
 ```
@@ -33,9 +37,11 @@ Falls back to checking common locations if detection fails.
 ---
 
 ### 3. **Backend URL Detection** ✅
+
 **Problem:** Script used hardcoded backend URL for connectivity test
 
 **Fix:** Extract backend URL from running daemon process arguments:
+
 ```bash
 BACKEND_URL=$(ps aux | grep log_collector_daemon | grep -oP -- '--api-url\s+\K[^\s]+' | head -1)
 ```
@@ -48,16 +54,16 @@ BACKEND_URL=$(ps aux | grep log_collector_daemon | grep -oP -- '--api-url\s+\K[^
 
 All endpoints now use `/api/` prefix:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/health` | GET | Health check - returns `{"status": "ok", "node_id": "..."}` |
-| `/api/status` | GET | Full daemon status (livelogs, telemetry, PIDs) |
-| `/api/control` | POST | Control commands (start/stop livelogs/telemetry) |
-| `/api/processes` | GET | List top processes by CPU/RAM |
-| `/api/processes/:pid` | GET | Process details |
-| `/api/processes/:pid/kill` | POST | Kill process |
-| `/api/processes/:pid/history` | GET | Process history |
-| `/api/processes/:pid/tree` | GET | Process tree |
+| Endpoint                      | Method | Description                                                 |
+| ----------------------------- | ------ | ----------------------------------------------------------- |
+| `/api/health`                 | GET    | Health check - returns `{"status": "ok", "node_id": "..."}` |
+| `/api/status`                 | GET    | Full daemon status (livelogs, telemetry, PIDs)              |
+| `/api/control`                | POST   | Control commands (start/stop livelogs/telemetry)            |
+| `/api/processes`              | GET    | List top processes by CPU/RAM                               |
+| `/api/processes/:pid`         | GET    | Process details                                             |
+| `/api/processes/:pid/kill`    | POST   | Kill process                                                |
+| `/api/processes/:pid/history` | GET    | Process history                                             |
+| `/api/processes/:pid/tree`    | GET    | Process tree                                                |
 
 ---
 
@@ -91,6 +97,7 @@ sudo ./diagnose-daemon.sh
 ```
 
 **Expected Results:**
+
 - ✅ Check 5 should now PASS (HTTP 200 instead of 404)
 - ✅ Check 9 should now PASS (venv detected at correct path)
 - All other checks should pass
@@ -100,6 +107,7 @@ sudo ./diagnose-daemon.sh
 ## 🧪 Testing
 
 ### Test Health Check
+
 ```bash
 # From the node
 curl http://localhost:8754/api/health
@@ -112,6 +120,7 @@ curl http://10.215.111.191:8754/api/health
 ```
 
 ### Test Process Endpoints
+
 ```bash
 # List processes
 curl http://10.215.111.191:8754/api/processes | jq
@@ -165,11 +174,13 @@ After deploying:
 ## 🐛 Remaining Issue
 
 **Heartbeat Timeouts:** The daemon logs show heartbeat connection failures to backend:
+
 ```
 Heartbeat error: Connection to 10.215.111.117 timed out
 ```
 
 **This is NOT related to the diagnostic script issues** - it means:
+
 1. Backend is not reachable from the node at `10.215.111.117:3000`
 2. Network routing issue or backend is down
 3. Backend `/api/heartbeat` endpoint may not exist
@@ -181,6 +192,7 @@ Heartbeat error: Connection to 10.215.111.117 timed out
 ## 📚 Updated Documentation
 
 Files updated:
+
 - ✅ `log_collector_daemon.py` - Fixed API routes
 - ✅ `diagnose-daemon.sh` - Smart path detection
 - ✅ `DAEMON_TROUBLESHOOTING.md` - Updated endpoint list
