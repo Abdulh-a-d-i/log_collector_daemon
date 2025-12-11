@@ -206,14 +206,14 @@ class AlertManager:
             if response.status_code in [200, 201]:
                 logger.info(f"[ALERT] ✓ Ticket created for {alert_type}: {message}")
             else:
-                logger.error(f"[ALERT] ✗ Failed to create ticket: {response.status_code} - {response.text[:200]}")
+                logger.warning(f"[ALERT] ✗ Ticket creation failed: {response.status_code} - {response.text[:200]}")
                 
         except requests.exceptions.Timeout:
-            logger.error(f"[ALERT] ✗ Timeout sending alert for {alert_type}")
+            logger.warning(f"[ALERT] ✗ Timeout sending alert for {alert_type}")
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"[ALERT] ✗ Connection error sending alert: {e}")
+            logger.warning(f"[ALERT] ✗ Connection issue sending alert: {e}")
         except Exception as e:
-            logger.error(f"[ALERT] ✗ Error sending alert: {e}")
+            logger.warning(f"[ALERT] ✗ Alert sending failed: {e}")
     
     def _generate_alert_description(self, alert_type, value, duration, metadata):
         """Generate detailed alert description"""

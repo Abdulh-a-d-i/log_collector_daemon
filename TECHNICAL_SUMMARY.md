@@ -9,33 +9,34 @@
 
 ### **Daemon Listening Ports (Inbound)**
 
-| Port | Service | Protocol | Purpose | Default | Configurable |
-|------|---------|----------|---------|---------|--------------|
-| **8754** | Control API | HTTP/TCP | REST API for daemon management (start/stop services, health checks, status queries) | ✅ Yes | ✅ `--control-port` |
-| **8755** | Live Logs | WebSocket/TCP | Real-time log streaming to dashboard clients (on-demand activation) | ✅ Yes | ✅ `--ws-port` |
-| **8756** | Telemetry | WebSocket/TCP | Real-time system metrics broadcasting to monitoring clients (on-demand activation) | ✅ Yes | ✅ `--telemetry-ws-port` |
+| Port     | Service     | Protocol      | Purpose                                                                             | Default | Configurable             |
+| -------- | ----------- | ------------- | ----------------------------------------------------------------------------------- | ------- | ------------------------ |
+| **8754** | Control API | HTTP/TCP      | REST API for daemon management (start/stop services, health checks, status queries) | ✅ Yes  | ✅ `--control-port`      |
+| **8755** | Live Logs   | WebSocket/TCP | Real-time log streaming to dashboard clients (on-demand activation)                 | ✅ Yes  | ✅ `--ws-port`           |
+| **8756** | Telemetry   | WebSocket/TCP | Real-time system metrics broadcasting to monitoring clients (on-demand activation)  | ✅ Yes  | ✅ `--telemetry-ws-port` |
 
 **Binding**: All services bind to `0.0.0.0` (all network interfaces) by design
 
 ### **Outbound Connections (Daemon → External)**
 
-| Target | Port | Protocol | Purpose | Frequency |
-|--------|------|----------|---------|-----------|
-| **Backend API** | 3000 | HTTP/TCP | Heartbeat signals (`/api/heartbeat`) | Every 30s (configurable) |
-| **Backend API** | 3000 | HTTP/TCP | Alert ticket creation (`/api/alerts/create`) | On threshold breach |
-| **Backend API** | 3000 | HTTP/TCP | System info submission (installation only) | Once during install |
-| **RabbitMQ** | 5672 | AMQP/TCP | Error log message queue submission | On error detection |
+| Target          | Port | Protocol | Purpose                                      | Frequency                |
+| --------------- | ---- | -------- | -------------------------------------------- | ------------------------ |
+| **Backend API** | 3000 | HTTP/TCP | Heartbeat signals (`/api/heartbeat`)         | Every 30s (configurable) |
+| **Backend API** | 3000 | HTTP/TCP | Alert ticket creation (`/api/alerts/create`) | On threshold breach      |
+| **Backend API** | 3000 | HTTP/TCP | System info submission (installation only)   | Once during install      |
+| **RabbitMQ**    | 5672 | AMQP/TCP | Error log message queue submission           | On error detection       |
 
 **Hardcoded Connection**:
+
 ```python
 RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672"
 ```
 
 ### **Optional SSH Access**
 
-| Port | Protocol | Purpose | User | Auth Method |
-|------|----------|---------|------|-------------|
-| **22** | SSH/TCP | File browser access (backend → agent) | `resolvix` | SSH key only |
+| Port   | Protocol | Purpose                               | User       | Auth Method  |
+| ------ | -------- | ------------------------------------- | ---------- | ------------ |
+| **22** | SSH/TCP  | File browser access (backend → agent) | `resolvix` | SSH key only |
 
 **Note**: Standard SSH daemon (sshd), not part of Python daemon
 
@@ -58,17 +59,18 @@ iptables -A OUTPUT -p tcp --dport 5672 -d 140.238.255.110 -j ACCEPT   # RabbitMQ
 
 ### **Port Classification**
 
-| Access Type | Ports | Recommendation |
-|-------------|-------|----------------|
-| **Internet-facing** | ❌ NONE | All daemon ports lack authentication |
-| **Internal Network** | ✅ 8754-8756 | Backend ↔ Agent communication only |
-| **Localhost Only** | ❌ NONE | All bind to 0.0.0.0 for remote access |
+| Access Type          | Ports        | Recommendation                        |
+| -------------------- | ------------ | ------------------------------------- |
+| **Internet-facing**  | ❌ NONE      | All daemon ports lack authentication  |
+| **Internal Network** | ✅ 8754-8756 | Backend ↔ Agent communication only    |
+| **Localhost Only**   | ❌ NONE      | All bind to 0.0.0.0 for remote access |
 
 ### **Security Gaps & Mitigations**
 
 ⚠️ **Current State**: No authentication on WebSocket/HTTP endpoints
 
 **Recommended Solutions**:
+
 1. **Reverse Proxy**: nginx/traefik with OAuth2/JWT authentication
 2. **VPN/Private Network**: Keep agents on isolated network
 3. **IP Whitelisting**: Firewall rules (implemented above)
@@ -83,17 +85,20 @@ iptables -A OUTPUT -p tcp --dport 5672 -d 140.238.255.110 -j ACCEPT   # RabbitMQ
 **Technology**: Regex-based pattern matching + RabbitMQ queue
 
 **Capabilities**:
+
 - Real-time log tailing (supports syslog, ISO8601, RFC3339 timestamps)
 - Keyword detection: `emerg`, `alert`, `critical`, `error`, `fail`, `panic`, `fatal`
 - Severity classification: `critical`, `failure`, `error`, `warn`, `info`
 - Reliable delivery via RabbitMQ message broker (persistent queue)
 
 **Data Flow**:
+
 ```
 Log File → Daemon (tail + filter) → RabbitMQ Queue → Backend Processor
 ```
 
 **Message Format**:
+
 ```json
 {
   "timestamp": "2024-01-15T10:30:45Z",
@@ -112,20 +117,23 @@ Log File → Daemon (tail + filter) → RabbitMQ Queue → Backend Processor
 **Technology**: asyncio + websockets library
 
 **Capabilities**:
+
 - On-demand activation via REST API (`POST /control {"command": "start_livelogs"}`)
 - Multi-client support (broadcast to all connected dashboards)
 - Auto-reconnection handling and client lifecycle management
 - Runs as subprocess (isolated from main daemon)
 
 **Use Cases**:
+
 - Real-time log viewing in web dashboard
 - Debugging and troubleshooting
 - Live incident response
 
 **Connection Flow**:
+
 ```javascript
 // Dashboard connects
-const ws = new WebSocket('ws://agent-ip:8755/livelogs');
+const ws = new WebSocket("ws://agent-ip:8755/livelogs");
 ws.onmessage = (event) => {
   const data = JSON.parse(event.data);
   console.log(`[${data.timestamp}] ${data.log}`);
@@ -140,15 +148,16 @@ ws.onmessage = (event) => {
 
 **Metrics Collected**:
 
-| Category | Metrics | Update Frequency |
-|----------|---------|------------------|
-| **CPU** | Usage %, per-core %, load averages (1/5/15 min) | Every 3-60s |
-| **Memory** | Total/used/available RAM, swap usage | Every 3-60s |
-| **Disk** | Per-partition usage, I/O rates (MB/sec) | Every 3-60s |
-| **Network** | Throughput (MB/sec), packet counts, active connections | Every 3-60s |
-| **Processes** | Total count, top 5 memory consumers | Every 3-60s |
+| Category      | Metrics                                                | Update Frequency |
+| ------------- | ------------------------------------------------------ | ---------------- |
+| **CPU**       | Usage %, per-core %, load averages (1/5/15 min)        | Every 3-60s      |
+| **Memory**    | Total/used/available RAM, swap usage                   | Every 3-60s      |
+| **Disk**      | Per-partition usage, I/O rates (MB/sec)                | Every 3-60s      |
+| **Network**   | Throughput (MB/sec), packet counts, active connections | Every 3-60s      |
+| **Processes** | Total count, top 5 memory consumers                    | Every 3-60s      |
 
 **Broadcast Mechanism**:
+
 - WebSocket server on port 8756
 - Continuous broadcasting to all connected clients
 - Default interval: 3 seconds (configurable 1-3600s)
@@ -163,24 +172,26 @@ ws.onmessage = (event) => {
 
 **Alert Types**:
 
-| Alert | Threshold | Duration | Cooldown | Priority |
-|-------|-----------|----------|----------|----------|
-| CPU Critical | 90% | 5 min | 30 min | critical |
-| CPU High | 75% | 10 min | 60 min | high |
-| Memory Critical | 95% | 5 min | 30 min | critical |
-| Memory High | 85% | 10 min | 60 min | high |
-| Disk Critical | 90% | Immediate | 2 hours | critical |
-| Disk High | 80% | Immediate | 4 hours | high |
-| Network Spike | 5x baseline | 1 min | 30 min | medium |
-| High Processes | 500+ | 5 min | 60 min | medium |
+| Alert           | Threshold   | Duration  | Cooldown | Priority |
+| --------------- | ----------- | --------- | -------- | -------- |
+| CPU Critical    | 90%         | 5 min     | 30 min   | critical |
+| CPU High        | 75%         | 10 min    | 60 min   | high     |
+| Memory Critical | 95%         | 5 min     | 30 min   | critical |
+| Memory High     | 85%         | 10 min    | 60 min   | high     |
+| Disk Critical   | 90%         | Immediate | 2 hours  | critical |
+| Disk High       | 80%         | Immediate | 4 hours  | high     |
+| Network Spike   | 5x baseline | 1 min     | 30 min   | medium   |
+| High Processes  | 500+        | 5 min     | 60 min   | medium   |
 
 **Key Features**:
+
 - **Duration-based triggering**: Prevents false positives from temporary spikes
 - **Cooldown periods**: Prevents alert spam for persistent issues
 - **Automatic ticket creation**: Creates tickets via backend API (`POST /api/alerts/create`)
 - **Rich context**: Includes metrics, recommendations, host info
 
 **Alert Lifecycle**:
+
 ```
 Metric breach detected → Start timer → Duration met? → Check cooldown → Create ticket
                                               ↓ NO
@@ -188,6 +199,7 @@ Metric breach detected → Start timer → Duration met? → Check cooldown → 
 ```
 
 **Ticket Payload**:
+
 ```json
 {
   "title": "🔴 CRITICAL: CPU usage at 92.3% for 5.0 minutes on web-server-01",
@@ -208,11 +220,13 @@ Metric breach detected → Start timer → Duration met? → Check cooldown → 
 **Purpose**: Detect dead/offline nodes
 
 **Mechanism**:
+
 - Background thread sends periodic heartbeat
 - Default interval: 30 seconds (configurable)
 - Endpoint: `{API_URL}/api/heartbeat`
 
 **Payload**:
+
 ```json
 {
   "node_id": "192.168.1.100",
@@ -222,6 +236,7 @@ Metric breach detected → Start timer → Duration met? → Check cooldown → 
 ```
 
 **Backend Logic**:
+
 - If heartbeat missing > 2 intervals → Mark node as offline
 - Trigger alerts for critical infrastructure
 
@@ -233,13 +248,14 @@ Metric breach detected → Start timer → Duration met? → Check cooldown → 
 
 **Endpoints**:
 
-| Method | Endpoint | Purpose | Response |
-|--------|----------|---------|----------|
-| GET | `/health` | Health check | `{"status": "ok", "node_id": "..."}` |
-| GET | `/status` | Service status | Full status of all services |
-| POST | `/control` | Service control | Start/stop livelogs/telemetry |
+| Method | Endpoint   | Purpose         | Response                             |
+| ------ | ---------- | --------------- | ------------------------------------ |
+| GET    | `/health`  | Health check    | `{"status": "ok", "node_id": "..."}` |
+| GET    | `/status`  | Service status  | Full status of all services          |
+| POST   | `/control` | Service control | Start/stop livelogs/telemetry        |
 
 **Control Commands**:
+
 ```json
 // Start live log streaming
 {"command": "start_livelogs"}
@@ -261,12 +277,14 @@ Metric breach detected → Start timer → Duration met? → Check cooldown → 
 **Purpose**: Secure backend access to agent files
 
 **Implementation**:
+
 - Dedicated user: `resolvix`
 - Groups: `adm` (read access to `/var/log`)
 - Authentication: SSH key only (no password)
 - Shell: `/bin/bash` (allows SSH command execution)
 
 **Backend Access**:
+
 ```bash
 # View logs
 ssh -i ~/.ssh/resolvix_rsa resolvix@agent-ip 'cat /var/log/syslog'
@@ -276,6 +294,7 @@ ssh -i ~/.ssh/resolvix_rsa resolvix@agent-ip 'ls -la /var/log'
 ```
 
 **Security**:
+
 - No sudo access
 - Read-only by design (backend validates paths)
 - SSH key rotation supported
@@ -287,6 +306,7 @@ ssh -i ~/.ssh/resolvix_rsa resolvix@agent-ip 'ls -la /var/log'
 **Purpose**: Hardware/OS fingerprinting during installation
 
 **Data Collected**:
+
 - OS type, version, release
 - Hostname and IP address
 - MAC address
@@ -295,6 +315,7 @@ ssh -i ~/.ssh/resolvix_rsa resolvix@agent-ip 'ls -la /var/log'
 - CPU core count (physical + logical)
 
 **One-time Submission**:
+
 - Runs during `install.sh` execution
 - Sends to: `{SYSTEM_INFO_URL}/api/system_info`
 - Creates `system_info.json` locally
@@ -306,11 +327,13 @@ ssh -i ~/.ssh/resolvix_rsa resolvix@agent-ip 'ls -la /var/log'
 ### **Automated Installation Script**
 
 **Command**:
+
 ```bash
 sudo ./install.sh LOG_FILE API_URL SYSTEM_INFO_URL AUTH_TOKEN SSH_PUBLIC_KEY
 ```
 
 **Example**:
+
 ```bash
 sudo ./install.sh \
   "/var/log/syslog" \
@@ -321,6 +344,7 @@ sudo ./install.sh \
 ```
 
 **Installation Steps**:
+
 1. Create `resolvix` user with SSH access
 2. Install system packages (python3, python3-venv, python3-pip)
 3. Create Python virtual environment
@@ -330,6 +354,7 @@ sudo ./install.sh \
 7. Start daemon
 
 **Dependencies**:
+
 ```
 flask>=2.0.0
 flask-cors>=3.0.0
@@ -414,12 +439,12 @@ curl http://agent-ip:8754/status
 
 ### **Resource Usage**
 
-| Resource | Idle | Active (with telemetry) |
-|----------|------|-------------------------|
-| **CPU** | <0.1% | 0.5-1% |
-| **Memory** | 30-50 MB | 50-80 MB |
-| **Disk I/O** | Minimal | Log tailing only |
-| **Network** | Heartbeat only | Heartbeat + telemetry |
+| Resource     | Idle           | Active (with telemetry) |
+| ------------ | -------------- | ----------------------- |
+| **CPU**      | <0.1%          | 0.5-1%                  |
+| **Memory**   | 30-50 MB       | 50-80 MB                |
+| **Disk I/O** | Minimal        | Log tailing only        |
+| **Network**  | Heartbeat only | Heartbeat + telemetry   |
 
 ### **Scalability**
 
@@ -432,11 +457,13 @@ curl http://agent-ip:8754/status
 ## 🚀 Deployment Best Practices
 
 ### **1. Network Segmentation**
+
 - Deploy agents on private network
 - Backend as gateway to agents
 - No direct internet exposure for agent ports
 
 ### **2. Monitoring Stack**
+
 ```
 Internet → [Firewall] → Backend (3000) → [Private Network] → Agents (8754-8756)
                             ↓
@@ -444,11 +471,13 @@ Internet → [Firewall] → Backend (3000) → [Private Network] → Agents (875
 ```
 
 ### **3. High Availability**
+
 - RabbitMQ cluster for message reliability
 - Multiple backend instances behind load balancer
 - Agent auto-restart via systemd
 
 ### **4. Security Hardening**
+
 - Firewall rules (only backend IP can access agent ports)
 - SSH key rotation policy
 - Regular security updates via package manager
@@ -459,11 +488,11 @@ Internet → [Firewall] → Backend (3000) → [Private Network] → Agents (875
 
 ### **Required Endpoints**
 
-| Endpoint | Method | Purpose | Payload |
-|----------|--------|---------|---------|
-| `/api/heartbeat` | POST | Agent heartbeat | `{node_id, status, timestamp}` |
-| `/api/alerts/create` | POST | Alert tickets | See alert payload above |
-| `/api/system_info` | POST | System profiling | See system_info.py output |
+| Endpoint             | Method | Purpose          | Payload                        |
+| -------------------- | ------ | ---------------- | ------------------------------ |
+| `/api/heartbeat`     | POST   | Agent heartbeat  | `{node_id, status, timestamp}` |
+| `/api/alerts/create` | POST   | Alert tickets    | See alert payload above        |
+| `/api/system_info`   | POST   | System profiling | See system_info.py output      |
 
 ### **RabbitMQ Integration**
 
@@ -472,9 +501,10 @@ Internet → [Firewall] → Backend (3000) → [Private Network] → Agents (875
 **Message Format**: See error log payload above
 
 **Backend Processor**:
+
 ```javascript
 // Consume from RabbitMQ queue
-channel.consume('error_logs_queue', (msg) => {
+channel.consume("error_logs_queue", (msg) => {
   const log = JSON.parse(msg.content.toString());
   // Process log, create ticket, store in DB, etc.
   channel.ack(msg);
@@ -485,13 +515,13 @@ channel.consume('error_logs_queue', (msg) => {
 
 ## 📚 Documentation Files
 
-| File | Purpose |
-|------|---------|
-| `README.md` | Complete user guide and installation instructions |
-| `SMART_ALERTING.md` | Smart alerting system documentation |
+| File                       | Purpose                                                   |
+| -------------------------- | --------------------------------------------------------- |
+| `README.md`                | Complete user guide and installation instructions         |
+| `SMART_ALERTING.md`        | Smart alerting system documentation                       |
 | `TELEMETRY_DATA_FORMAT.md` | Telemetry WebSocket data format and TypeScript interfaces |
-| `DEBUG_TELEMETRY.md` | Troubleshooting guide for telemetry issues |
-| `FILE_BROWSER_SETUP.md` | SSH file browser configuration guide |
+| `DEBUG_TELEMETRY.md`       | Troubleshooting guide for telemetry issues                |
+| `FILE_BROWSER_SETUP.md`    | SSH file browser configuration guide                      |
 
 ---
 
@@ -505,7 +535,7 @@ channel.consume('error_logs_queue', (msg) => {
 ✅ **Reliable Delivery**: RabbitMQ message queue for error logs  
 ✅ **Remote Management**: HTTP API for service control  
 ✅ **System Profiling**: Hardware/OS fingerprinting  
-✅ **Secure Access**: SSH-based file browser  
+✅ **Secure Access**: SSH-based file browser
 
 ### **Architecture Considerations**
 

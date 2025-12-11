@@ -9,16 +9,19 @@ The Resolvix daemon now includes **intelligent threshold-based alerting** that a
 ## 🎯 Features
 
 ### **Automated Monitoring**
+
 - Continuous monitoring of CPU, memory, disk, network, and processes
 - No manual intervention required once configured
 - Runs seamlessly with existing telemetry collection
 
 ### **Smart Thresholds**
+
 - **Duration-based alerts**: Prevents false positives from temporary spikes
 - **Cooldown periods**: Prevents alert spam for persistent issues
 - **Severity classification**: Critical, high, medium priority levels
 
 ### **Automatic Ticket Creation**
+
 - Creates tickets in backend via API when thresholds breached
 - Rich context: Includes metrics, timestamps, recommended actions
 - Seamless integration with existing ticketing system
@@ -29,14 +32,15 @@ The Resolvix daemon now includes **intelligent threshold-based alerting** that a
 
 ### **1. CPU Alerts**
 
-| Alert Level | Threshold | Duration | Cooldown | Priority |
-|-------------|-----------|----------|----------|----------|
-| Critical | 90% | 5 minutes | 30 minutes | critical |
-| High | 75% | 10 minutes | 1 hour | high |
+| Alert Level | Threshold | Duration   | Cooldown   | Priority |
+| ----------- | --------- | ---------- | ---------- | -------- |
+| Critical    | 90%       | 5 minutes  | 30 minutes | critical |
+| High        | 75%       | 10 minutes | 1 hour     | high     |
 
 **Triggers when**: CPU usage exceeds threshold continuously for specified duration
 
 **Example**:
+
 ```
 🔴 CRITICAL: CPU usage at 92.3% for 5.0 minutes on web-server-01
 ```
@@ -45,14 +49,15 @@ The Resolvix daemon now includes **intelligent threshold-based alerting** that a
 
 ### **2. Memory Alerts**
 
-| Alert Level | Threshold | Duration | Cooldown | Priority |
-|-------------|-----------|----------|----------|----------|
-| Critical | 95% | 5 minutes | 30 minutes | critical |
-| High | 85% | 10 minutes | 1 hour | high |
+| Alert Level | Threshold | Duration   | Cooldown   | Priority |
+| ----------- | --------- | ---------- | ---------- | -------- |
+| Critical    | 95%       | 5 minutes  | 30 minutes | critical |
+| High        | 85%       | 10 minutes | 1 hour     | high     |
 
 **Triggers when**: Memory usage exceeds threshold continuously for specified duration
 
 **Example**:
+
 ```
 🔴 CRITICAL: Memory usage at 96.2% for 5.0 minutes on db-server-02
 ```
@@ -61,14 +66,15 @@ The Resolvix daemon now includes **intelligent threshold-based alerting** that a
 
 ### **3. Disk Alerts**
 
-| Alert Level | Threshold | Duration | Cooldown | Priority |
-|-------------|-----------|----------|----------|----------|
-| Critical | 90% | Immediate | 2 hours | critical |
-| High | 80% | Immediate | 4 hours | high |
+| Alert Level | Threshold | Duration  | Cooldown | Priority |
+| ----------- | --------- | --------- | -------- | -------- |
+| Critical    | 90%       | Immediate | 2 hours  | critical |
+| High        | 80%       | Immediate | 4 hours  | high     |
 
 **Triggers when**: Disk usage exceeds threshold (no duration requirement)
 
 **Example**:
+
 ```
 🔴 CRITICAL: Disk usage at 92% on app-server-03. Immediate action required!
 ```
@@ -77,13 +83,14 @@ The Resolvix daemon now includes **intelligent threshold-based alerting** that a
 
 ### **4. Network Spike Alerts**
 
-| Alert Type | Threshold | Duration | Cooldown | Priority |
-|------------|-----------|----------|----------|----------|
-| Network Spike | 5x normal | 1 minute | 30 minutes | medium |
+| Alert Type    | Threshold | Duration | Cooldown   | Priority |
+| ------------- | --------- | -------- | ---------- | -------- |
+| Network Spike | 5x normal | 1 minute | 30 minutes | medium   |
 
 **Triggers when**: Network traffic exceeds 5x the baseline average
 
 **Example**:
+
 ```
 ⚠️ Network traffic spike detected: 6.2x normal on api-server-04
 ```
@@ -92,13 +99,14 @@ The Resolvix daemon now includes **intelligent threshold-based alerting** that a
 
 ### **5. Process Count Alerts**
 
-| Alert Type | Threshold | Duration | Cooldown | Priority |
-|------------|-----------|----------|----------|----------|
-| High Process Count | 500 processes | 5 minutes | 1 hour | medium |
+| Alert Type         | Threshold     | Duration  | Cooldown | Priority |
+| ------------------ | ------------- | --------- | -------- | -------- |
+| High Process Count | 500 processes | 5 minutes | 1 hour   | medium   |
 
 **Triggers when**: Too many processes running (potential fork bomb or leak)
 
 **Example**:
+
 ```
 ⚠️ High process count: 550 processes running on worker-node-05
 ```
@@ -124,6 +132,7 @@ ALERT_THRESHOLDS = {
 ### **Customization Guide**
 
 #### **For Development/Staging Servers** (less strict):
+
 ```python
 'cpu_critical': {
     'threshold': 95,      # Higher threshold
@@ -133,6 +142,7 @@ ALERT_THRESHOLDS = {
 ```
 
 #### **For Production Servers** (more strict):
+
 ```python
 'cpu_critical': {
     'threshold': 80,      # Lower threshold
@@ -142,6 +152,7 @@ ALERT_THRESHOLDS = {
 ```
 
 #### **For High-Traffic Servers**:
+
 ```python
 'network_spike': {
     'threshold_multiplier': 10,  # 10x instead of 5x
@@ -162,6 +173,7 @@ ALERT_THRESHOLDS = {
 ### **Integration Status**
 
 ✅ Automatically integrated into:
+
 - `log_collector_daemon.py` - Main daemon
 - `telemetry_ws.py` - Telemetry collector
 
@@ -180,6 +192,7 @@ python3 test_alerts.py
 ```
 
 ### **Test Menu**
+
 ```
 1. CPU Alert (5 min duration)
 2. Memory Alert (5 min duration)
@@ -193,6 +206,7 @@ python3 test_alerts.py
 ### **Manual Testing**
 
 **Test CPU Alert:**
+
 ```python
 from alert_manager import AlertManager
 
@@ -209,6 +223,7 @@ for i in range(360):
 ```
 
 **Expected Output:**
+
 ```
 [ALERT] cpu_critical threshold breached: 95.5%
 ... (waits 5 minutes) ...
@@ -250,6 +265,7 @@ The daemon expects this endpoint on your backend:
 ```
 
 **Status Codes:**
+
 - `200` or `201` - Success
 - `4xx` or `5xx` - Error (logged but doesn't crash daemon)
 
@@ -322,14 +338,17 @@ Each alert ticket includes:
 **Duration:** 5.0 minutes
 
 **Threshold Configuration:**
+
 - Threshold: 90%
 - Required Duration: 300s
 - Priority: critical
 
 **Additional Metrics:**
+
 - cpu_percent: 92.3
 
 **Recommended Actions:**
+
 1. Check top processes: `top` or `htop`
 2. Kill unnecessary processes
 3. Consider scaling horizontally
@@ -387,21 +406,25 @@ tail -f /var/log/resolvix.log
 ## 🎯 Use Cases
 
 ### **1. Proactive Incident Prevention**
+
 - Catch resource exhaustion before service crashes
 - Alert before disk fills up completely
 - Detect memory leaks early
 
 ### **2. Performance Monitoring**
+
 - Track sustained high CPU usage
 - Monitor memory pressure over time
 - Identify capacity planning needs
 
 ### **3. Anomaly Detection**
+
 - Network traffic spikes (DDoS, data exfiltration)
 - Process count explosions (fork bombs, leaks)
 - Unusual resource consumption patterns
 
 ### **4. Compliance & SLA**
+
 - Automated alerting for resource thresholds
 - Documented response times
 - Audit trail of system issues
@@ -413,12 +436,14 @@ tail -f /var/log/resolvix.log
 ### **Alerts Not Triggering**
 
 **Check:**
+
 1. AlertManager initialized? Look for log: `[AlertManager] Smart alerting enabled`
 2. Backend URL configured? Check daemon startup logs
 3. Metrics being collected? Check telemetry is running
 4. Thresholds too high? Review `alert_config.py`
 
 **Debug:**
+
 ```bash
 # Check if alert manager module is loaded
 python3 -c "from alert_manager import AlertManager; print('OK')"
@@ -445,12 +470,14 @@ curl http://localhost:8754/status
 ### **Backend Not Receiving Alerts**
 
 **Check:**
+
 1. Backend API endpoint exists: `/api/alerts/create`
 2. Backend is reachable: `curl http://backend:3000/api/alerts/create`
 3. Check daemon logs for HTTP errors
 4. Verify backend URL in daemon startup
 
 **Test manually:**
+
 ```bash
 curl -X POST http://backend:3000/api/alerts/create \
   -H "Content-Type: application/json" \
@@ -470,6 +497,7 @@ curl -X POST http://backend:3000/api/alerts/create \
 ### **Optimization**
 
 Alert checking is integrated into existing telemetry collection:
+
 - No additional polling loops
 - No separate threads
 - Reuses collected metrics
@@ -498,6 +526,7 @@ Submit feature requests to the development team!
 ### **Enable/Disable Alerts**
 
 **Enabled by default** when:
+
 - `alert_manager.py` and `alert_config.py` exist
 - Backend URL is configured
 
@@ -506,16 +535,19 @@ Submit feature requests to the development team!
 ### **Common Configurations**
 
 **Production (Conservative)**:
+
 ```python
 'cpu_critical': {'threshold': 85, 'duration': 300, 'cooldown': 3600}
 ```
 
 **Development (Aggressive)**:
+
 ```python
 'cpu_critical': {'threshold': 95, 'duration': 600, 'cooldown': 300}
 ```
 
 **High-Traffic (Lenient)**:
+
 ```python
 'cpu_critical': {'threshold': 90, 'duration': 900, 'cooldown': 1800}
 ```
@@ -525,12 +557,14 @@ Submit feature requests to the development team!
 ## 📞 Support
 
 **Issues?**
+
 - Check logs: `/var/log/resolvix.log`
 - Test alerts: `python3 test_alerts.py`
 - Review configuration: `alert_config.py`
 
 **Questions?**
 Contact the daemon development team with:
+
 - Log excerpts
 - Configuration settings
 - Expected vs actual behavior

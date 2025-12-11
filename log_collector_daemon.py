@@ -25,7 +25,12 @@ try:
     ALERT_MANAGER_AVAILABLE = True
 except ImportError:
     ALERT_MANAGER_AVAILABLE = False
-    logger.warning("Alert manager not available - alerts disabled")
+    
+try:
+    from process_monitor import ProcessMonitor
+    PROCESS_MONITOR_AVAILABLE = True
+except ImportError:
+    PROCESS_MONITOR_AVAILABLE = False
 
 RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672";
 QUEUE_NAME = "error_logs_queue";
@@ -181,6 +186,18 @@ class LogCollectorDaemon:
         else:
             self.alert_manager = None
             logger.info("[AlertManager] Disabled (module not available)")
+        
+        # Initialize Process Monitor
+        if PROCESS_MONITOR_AVAILABLE:
+            try:
+                self.process_monitor = ProcessMonitor(history_size=1000)
+                logger.info("[ProcessMonitor] Process monitoring enabled")
+            except Exception as e:
+                logger.error(f"[ProcessMonitor] Failed to initialize: {e}")
+                self.process_monitor = None
+        else:
+            self.process_monitor = None
+            logger.info("[ProcessMonitor] Disabled (module not available)")
 
     def start(self):
         # starts background thread for monitoring
@@ -256,7 +273,7 @@ class LogCollectorDaemon:
             with open(self.log_file, "r", errors="ignore") as f:
                 # go to EOF
                 f.seek(0, os.SEEK_END)
-                logger.info("Monitoring started, waiting for error logs...")
+                logger.info("Monitoring started, waiting for critical log entries...")
                 while not self._stop_flag.is_set():
                     line = f.readline()
                     if not line:
@@ -273,12 +290,12 @@ class LogCollectorDaemon:
                             "log_line": line.rstrip("\n"),
                             "severity": severity
                         }
-                        logger.info(f"Error detected [{severity}]: {line.strip()[:100]}")
+                        logger.info(f"Issue detected [{severity}]: {line.strip()[:100]}")
                         # best-effort post; don't crash daemon if fails
                         if self.api_url:
                             success = send_to_rabbitmq(payload)
                             if success:
-                                logger.info(f"✅ Error log sent to RabbitMQ successfully")
+                                logger.info(f"✅ Log entry sent to RabbitMQ successfully")
                             else:
                                 logger.error(f"❌ Failed to send log to RabbitMQ")
                         else:
@@ -483,6 +500,86 @@ def make_app(daemon: LogCollectorDaemon):
     @app.route("/status", methods=["GET"])
     def status():
         return jsonify(daemon.get_status()), HTTPStatus.OK
+    
+    # -------- Process Monitoring Endpoints --------
+    @app.route("/api/processes", methods=["GET"])
+    def get_processes():
+        """GET /api/processes - Returns current top processes by CPU and RAM"""
+        if not daemon.process_monitor:
+            return jsonify({"error": "Process monitoring not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            metrics = daemon.process_monitor.get_process_metrics()
+            return jsonify(metrics), HTTPStatus.OK
+        except Exception as e:
+            logger.error(f"Failed to get process metrics: {e}")
+            return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+    
+    @app.route("/api/processes/<int:pid>", methods=["GET"])
+    def get_process_details(pid):
+        """GET /api/processes/{pid} - Returns detailed info about specific process"""
+        if not daemon.process_monitor:
+            return jsonify({"error": "Process monitoring not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            details = daemon.process_monitor.get_process_details(pid)
+            if details.get('success'):
+                return jsonify(details), HTTPStatus.OK
+            else:
+                return jsonify(details), HTTPStatus.NOT_FOUND
+        except Exception as e:
+            logger.error(f"Failed to get process details for PID {pid}: {e}")
+            return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+    
+    @app.route("/api/processes/<int:pid>/kill", methods=["POST"])
+    def kill_process_endpoint(pid):
+        """POST /api/processes/{pid}/kill - Kills a process"""
+        if not daemon.process_monitor:
+            return jsonify({"error": "Process monitoring not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            data = request.get_json() or {}
+            force = data.get('force', False)
+            
+            result = daemon.process_monitor.kill_process(pid, force)
+            
+            if result['success']:
+                return jsonify(result), HTTPStatus.OK
+            else:
+                return jsonify(result), HTTPStatus.BAD_REQUEST
+        except Exception as e:
+            logger.error(f"Failed to kill process {pid}: {e}")
+            return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+    
+    @app.route("/api/processes/<int:pid>/history", methods=["GET"])
+    def get_process_history_endpoint(pid):
+        """GET /api/processes/{pid}/history?hours=24 - Returns historical metrics"""
+        if not daemon.process_monitor:
+            return jsonify({"error": "Process monitoring not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            hours = request.args.get('hours', 24, type=int)
+            history = daemon.process_monitor.get_process_history(pid, hours)
+            return jsonify(history), HTTPStatus.OK
+        except Exception as e:
+            logger.error(f"Failed to get process history for PID {pid}: {e}")
+            return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+    
+    @app.route("/api/processes/<int:pid>/tree", methods=["GET"])
+    def get_process_tree_endpoint(pid):
+        """GET /api/processes/{pid}/tree - Returns process tree (parent and children)"""
+        if not daemon.process_monitor:
+            return jsonify({"error": "Process monitoring not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            tree = daemon.process_monitor.get_process_tree(pid)
+            if tree.get('success'):
+                return jsonify(tree), HTTPStatus.OK
+            else:
+                return jsonify(tree), HTTPStatus.NOT_FOUND
+        except Exception as e:
+            logger.error(f"Failed to get process tree for PID {pid}: {e}")
+            return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
 
     return app
 
