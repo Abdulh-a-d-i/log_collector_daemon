@@ -2,7 +2,7 @@
 
 A comprehensive distributed log monitoring and telemetry collection system for Linux servers. This daemon monitors system logs in real-time, filters critical errors, streams live logs via WebSocket, and collects system telemetry metrics for centralized monitoring.
 
-##  Table of Contents
+## Table of Contents
 
 - [Features](#features)
 - [Architecture](#architecture)
@@ -15,22 +15,35 @@ A comprehensive distributed log monitoring and telemetry collection system for L
 - [Uninstallation](#uninstallation)
 - [Troubleshooting](#troubleshooting)
 
-##  Features
+## Features
 
 ### Error Log Monitoring
+
 - **Real-time log monitoring** - Continuously tails log files for error patterns
 - **Intelligent filtering** - Detects errors, warnings, critical issues, and failures
 - **Severity classification** - Automatically categorizes log entries (critical, failure, error, warn, info)
 - **Timestamp parsing** - Handles multiple log timestamp formats (syslog, ISO8601, RFC3339)
 - **Centralized reporting** - Sends filtered errors to central API endpoint
+- **Suppression rules** ⭐ NEW - Filter out known errors before ticket creation
+
+### Suppression Rules ⭐ NEW
+
+- **Database-driven filtering** - Define rules to suppress specific error patterns
+- **Case-insensitive matching** - Flexible text matching across log entries
+- **Node-specific rules** - Apply rules to specific servers or all servers
+- **Smart caching** - 60-second cache TTL for optimal performance
+- **Statistics tracking** - Monitor how many errors each rule suppresses
+- **Temporal rules** - Set expiration dates for temporary suppressions
 
 ### Live Log Streaming
+
 - **WebSocket server** - Streams logs in real-time to connected clients
 - **On-demand activation** - Start/stop live streaming via control API
 - **Multi-client support** - Multiple clients can connect simultaneously
 - **Auto-reconnection** - Handles client disconnections gracefully
 
 ### System Telemetry
+
 - **CPU metrics** - Usage percentage, per-core stats, load averages
 - **Memory metrics** - RAM and swap usage statistics
 - **Disk metrics** - Usage per partition, I/O rates (read/write MB/sec)
@@ -39,11 +52,12 @@ A comprehensive distributed log monitoring and telemetry collection system for L
 - **Configurable intervals** - Adjust collection frequency (default: 60 seconds)
 
 ### Control Interface
+
 - **HTTP control API** - Start/stop live log streaming remotely
 - **Health checks** - Monitor daemon status
 - **On-demand telemetry** - Request current metrics via API
 
-##  Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -83,14 +97,16 @@ A comprehensive distributed log monitoring and telemetry collection system for L
                 └──────────────┘
 ```
 
-##  Requirements
+## Requirements
 
 ### System Requirements
+
 - Linux-based operating system
 - Python 3.7 or higher
 - Root or sudo access (for systemd service installation)
 
 ### Python Dependencies
+
 ```
 flask>=2.0.0
 flask-cors>=3.0.0
@@ -99,7 +115,7 @@ requests>=2.25.0
 websockets>=10.0
 ```
 
-##  Installation
+## Installation
 
 ### 1. Clone the Repository
 
@@ -124,6 +140,7 @@ pip install -r requirements.txt
 ### 4. Run Installation Script
 
 The installation script will:
+
 - Set up the virtual environment
 - Install all dependencies
 - Configure systemd service
@@ -135,6 +152,7 @@ sudo ./install.sh
 ```
 
 **During installation, you'll be prompted for:**
+
 - Log file path to monitor (e.g., `/var/log/syslog`)
 - Central API URL (e.g., `http://your-api-server.com:5000`)
 - Control port (default: 8754)
@@ -152,6 +170,7 @@ curl http://localhost:8754/health
 ```
 
 Expected response:
+
 ```json
 {
   "status": "ok",
@@ -160,7 +179,7 @@ Expected response:
 }
 ```
 
-##  Configuration
+## Configuration
 
 ### Command Line Options
 
@@ -190,6 +209,7 @@ export TELEMETRY_INTERVAL=60
 ### Error Keywords
 
 The daemon filters logs containing these keywords (case-insensitive):
+
 - `emerg`, `emergency`
 - `alert`
 - `crit`, `critical`
@@ -198,7 +218,7 @@ The daemon filters logs containing these keywords (case-insensitive):
 - `panic`
 - `fatal`
 
-##  Usage
+## Usage
 
 ### Manual Start
 
@@ -233,6 +253,7 @@ curl -X POST http://localhost:8754/control \
 ```
 
 Response:
+
 ```json
 {
   "status": "started",
@@ -260,7 +281,7 @@ curl -X POST http://localhost:8754/control \
 
 ```javascript
 // JavaScript/Node.js example
-const ws = new WebSocket('ws://server-ip:8755/livelogs');
+const ws = new WebSocket("ws://server-ip:8755/livelogs");
 
 ws.onmessage = (event) => {
   const data = JSON.parse(event.data);
@@ -268,7 +289,7 @@ ws.onmessage = (event) => {
 };
 
 ws.onerror = (error) => {
-  console.error('WebSocket error:', error);
+  console.error("WebSocket error:", error);
 };
 ```
 
@@ -288,16 +309,18 @@ async def stream_logs():
 asyncio.run(stream_logs())
 ```
 
-##  API Endpoints
+## API Endpoints
 
 ### Central API (Your Server)
 
 Your central server should expose these endpoints:
 
 #### 1. POST `/logs`
+
 Receives filtered error logs from nodes.
 
 **Request Body:**
+
 ```json
 {
   "timestamp": "2024-01-15T10:30:45Z",
@@ -310,9 +333,11 @@ Receives filtered error logs from nodes.
 ```
 
 #### 2. POST `/telemetry`
+
 Receives system telemetry metrics from nodes.
 
 **Request Body:**
+
 ```json
 {
   "timestamp": "2024-01-15T10:30:45Z",
@@ -353,7 +378,7 @@ Receives system telemetry metrics from nodes.
     "processes": {
       "process_count": 234,
       "top_memory_processes": [
-        {"pid": 1234, "name": "chrome", "memory_percent": 15.2}
+        { "pid": 1234, "name": "chrome", "memory_percent": 15.2 }
       ]
     }
   }
@@ -363,9 +388,11 @@ Receives system telemetry metrics from nodes.
 ### Control API (Daemon)
 
 #### 1. GET `/health`
+
 Health check endpoint.
 
 **Response:**
+
 ```json
 {
   "status": "ok",
@@ -375,14 +402,16 @@ Health check endpoint.
 ```
 
 #### 2. POST `/control`
+
 Control daemon operations.
 
 **Commands:**
+
 - `start_livelogs` - Start live log streaming
 - `stop_livelogs` - Stop live log streaming
 - `get_telemetry` - Get current telemetry snapshot
 
-##  Systemd Service
+## Systemd Service
 
 ### Service Management
 
@@ -450,7 +479,7 @@ sudo systemctl enable resolvix
 sudo systemctl start resolvix
 ```
 
-##  Uninstallation
+## Uninstallation
 
 ### Using Uninstall Script
 
@@ -460,6 +489,7 @@ sudo ./uninstall.sh
 ```
 
 The script will:
+
 1. Stop the systemd service
 2. Disable the service
 3. Remove the service file
@@ -482,22 +512,25 @@ sudo systemctl daemon-reload
 rm -rf /path/to/resolvix
 ```
 
-##  Troubleshooting
+## Troubleshooting
 
 ### Daemon Won't Start
 
 **Check logs:**
+
 ```bash
 sudo journalctl -u resolvix -n 50
 ```
 
 **Common issues:**
+
 - Log file doesn't exist or is inaccessible
 - Port already in use
 - Missing Python dependencies
 - Permission issues
 
 **Solutions:**
+
 ```bash
 # Check if log file exists
 ls -la /var/log/syslog
@@ -513,6 +546,7 @@ pip list
 ### WebSocket Connection Fails
 
 **Check if livelogs is running:**
+
 ```bash
 curl -X POST http://localhost:8754/control \
   -H "Content-Type: application/json" \
@@ -520,6 +554,7 @@ curl -X POST http://localhost:8754/control \
 ```
 
 **Test WebSocket connection:**
+
 ```bash
 # Install websocat
 # Ubuntu/Debian: sudo apt install websocat
@@ -533,17 +568,20 @@ websocat ws://localhost:8755/livelogs
 The daemon is designed to be lightweight, but if you experience high CPU:
 
 1. **Increase monitoring interval:**
+
 ```bash
 # Edit service file to increase interval
 --telemetry-interval 120  # Collect every 2 minutes
 ```
 
 2. **Disable unnecessary features:**
+
 ```bash
 --disable-telemetry  # Disable telemetry if not needed
 ```
 
 3. **Check log file size:**
+
 ```bash
 # Large log files can slow down tailing
 ls -lh /var/log/syslog
@@ -552,6 +590,7 @@ ls -lh /var/log/syslog
 ### Telemetry Not Sending
 
 **Check API connectivity:**
+
 ```bash
 curl -X POST http://your-api-url/telemetry \
   -H "Content-Type: application/json" \
@@ -559,6 +598,7 @@ curl -X POST http://your-api-url/telemetry \
 ```
 
 **Check daemon logs for errors:**
+
 ```bash
 sudo journalctl -u resolvix | grep telemetry
 ```
@@ -580,6 +620,7 @@ User=root
 
 **Increase timeout in code:**
 Edit `log_collector_daemon.py` and `telemetry_collector.py`:
+
 ```python
 # Change timeout from 5 to 30 seconds
 requests.post(url, json=data, timeout=30)
@@ -597,18 +638,18 @@ To visualize the collected data, you can create a dashboard using:
 
 ```sql
 -- CPU Usage Over Time
-SELECT time, cpu_usage_percent 
-FROM telemetry 
+SELECT time, cpu_usage_percent
+FROM telemetry
 WHERE node_id = '192.168.1.100'
 
 -- Memory Usage Trend
-SELECT time, memory_usage_percent 
-FROM telemetry 
+SELECT time, memory_usage_percent
+FROM telemetry
 WHERE node_id = '192.168.1.100'
 
 -- Error Count by Severity
-SELECT severity, COUNT(*) 
-FROM logs 
+SELECT severity, COUNT(*)
+FROM logs
 WHERE timestamp > NOW() - INTERVAL '1 hour'
 GROUP BY severity
 ```
@@ -618,17 +659,20 @@ GROUP BY severity
 The daemon can parse multiple timestamp formats:
 
 ### Syslog Format
+
 ```
 Oct 11 22:14:15 hostname process[123]: Error message
 ```
 
 ### ISO8601 / RFC3339
+
 ```
 2024-01-15T10:30:45Z Error message
 2024-01-15T10:30:45.123456Z Error message
 ```
 
 ### Custom Formats
+
 Extend the `parse_timestamp()` function in `log_collector_daemon.py` to support additional formats.
 
 ## Contributing
@@ -640,10 +684,10 @@ Contributions are welcome! Please:
 3. Make your changes
 4. Submit a pull request
 
-
-##  Support
+## Support
 
 For issues and questions:
+
 - Open an issue on GitHub
 - Check existing issues for solutions
 - Review troubleshooting section

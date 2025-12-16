@@ -21,6 +21,12 @@ from logging.handlers import RotatingFileHandler
 import pika
 import json
 try:
+    import psycopg2
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    PSYCOPG2_AVAILABLE = False
+    print("[WARNING] psycopg2 not available - suppression rules disabled")
+try:
     from alert_manager import AlertManager
     ALERT_MANAGER_AVAILABLE = True
 except ImportError:
@@ -31,6 +37,13 @@ try:
     PROCESS_MONITOR_AVAILABLE = True
 except ImportError:
     PROCESS_MONITOR_AVAILABLE = False
+
+try:
+    from suppression_checker import SuppressionRuleChecker
+    SUPPRESSION_CHECKER_AVAILABLE = True
+except ImportError:
+    SUPPRESSION_CHECKER_AVAILABLE = False
+    print("[WARNING] suppression_checker not available - suppression rules disabled")
 
 RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672";
 QUEUE_NAME = "error_logs_queue";
@@ -149,7 +162,8 @@ class LogCollectorDaemon:
     def __init__(self, log_file, api_url, ws_port=DEFAULT_WS_PORT, 
                  telemetry_ws_port=DEFAULT_TELEMETRY_WS_PORT, node_id=None, 
                  interval=1, tail_lines=200, telemetry_interval=DEFAULT_TELEMETRY_INTERVAL,
-                 heartbeat_interval=DEFAULT_HEARTBEAT_INTERVAL):
+                 heartbeat_interval=DEFAULT_HEARTBEAT_INTERVAL,
+                 db_host=None, db_name=None, db_user=None, db_password=None, db_port=5432):
         self.log_file = os.path.abspath(log_file)
         self.api_url = api_url.rstrip("/") if api_url else None
         self.ws_port = int(ws_port)
@@ -170,6 +184,32 @@ class LogCollectorDaemon:
         # compiled keyword regex for faster matching
         kw = "|".join(re.escape(k) for k in ERROR_KEYWORDS)
         self._err_re = re.compile(rf"\b({kw})\b", re.IGNORECASE)
+        
+        # Database connection and suppression checker
+        self.db_connection = None
+        self.suppression_checker = None
+        if db_host and db_name and db_user and db_password and PSYCOPG2_AVAILABLE and SUPPRESSION_CHECKER_AVAILABLE:
+            try:
+                self.db_connection = psycopg2.connect(
+                    host=db_host,
+                    database=db_name,
+                    user=db_user,
+                    password=db_password,
+                    port=db_port
+                )
+                self.suppression_checker = SuppressionRuleChecker(self.db_connection, cache_ttl=60)
+                logger.info("[SuppressionChecker] Enabled with database connection")
+            except Exception as e:
+                logger.error(f"[SuppressionChecker] Failed to initialize: {e}")
+                self.db_connection = None
+                self.suppression_checker = None
+        else:
+            if not (db_host and db_name and db_user and db_password):
+                logger.info("[SuppressionChecker] Disabled (no database credentials provided)")
+            elif not PSYCOPG2_AVAILABLE:
+                logger.warning("[SuppressionChecker] Disabled (psycopg2 not installed)")
+            elif not SUPPRESSION_CHECKER_AVAILABLE:
+                logger.warning("[SuppressionChecker] Disabled (suppression_checker module not available)")
         
         # Initialize Alert Manager
         if ALERT_MANAGER_AVAILABLE:
@@ -220,6 +260,13 @@ class LogCollectorDaemon:
         # ensure live proc stopped
         self.stop_livelogs()
         self.stop_telemetry()
+        # close database connection
+        if self.db_connection:
+            try:
+                self.db_connection.close()
+                logger.info("Database connection closed")
+            except Exception as e:
+                logger.error(f"Error closing database connection: {e}")
 
     def _read_last_lines(self, filepath, lines=200):
         try:
@@ -291,6 +338,28 @@ class LogCollectorDaemon:
                             "severity": severity
                         }
                         logger.info(f"Issue detected [{severity}]: {line.strip()[:100]}")
+                        
+                        # ============================================
+                        # CHECK SUPPRESSION RULES BEFORE SENDING
+                        # ============================================
+                        if self.suppression_checker:
+                            try:
+                                should_suppress, matched_rule = self.suppression_checker.should_suppress(
+                                    line.rstrip("\n"),
+                                    self.node_id
+                                )
+                                
+                                if should_suppress:
+                                    logger.info(
+                                        f"[SUPPRESSED] Error suppressed by rule: {matched_rule['name']} (ID: {matched_rule['id']})"
+                                    )
+                                    logger.debug(f"[SUPPRESSED] Match text: {matched_rule['match_text']}")
+                                    logger.debug(f"[SUPPRESSED] Error line: {line.strip()[:200]}")
+                                    continue  # Skip sending to RabbitMQ
+                            except Exception as e:
+                                logger.error(f"[SUPPRESSED] Error checking suppression rules: {e}")
+                                # On error, proceed with sending (fail-open behavior)
+                        
                         # best-effort post; don't crash daemon if fails
                         if self.api_url:
                             success = send_to_rabbitmq(payload)
@@ -402,7 +471,7 @@ class LogCollectorDaemon:
             telemetry_running = self._telemetry_proc and self._telemetry_proc.poll() is None
             telemetry_pid = self._telemetry_proc.pid if telemetry_running else None
         
-        return {
+        status = {
             "node_id": self.node_id,
             "log_file": self.log_file,
             "livelogs": {
@@ -417,6 +486,21 @@ class LogCollectorDaemon:
                 "interval": self.telemetry_interval
             }
         }
+        
+        # Add suppression statistics if available
+        if self.suppression_checker:
+            try:
+                status["suppression_rules"] = {
+                    "enabled": True,
+                    "statistics": self.suppression_checker.get_statistics()
+                }
+            except Exception as e:
+                logger.error(f"Error getting suppression statistics: {e}")
+                status["suppression_rules"] = {"enabled": True, "error": str(e)}
+        else:
+            status["suppression_rules"] = {"enabled": False}
+        
+        return status
 
 # tail helper (efficientish)
 def tail_lines_from_file(fobj, n):
@@ -608,6 +692,12 @@ def parse_args():
                         help="Telemetry collection interval in seconds (default: 3)")
     parser.add_argument("--heartbeat-interval", type=int, default=DEFAULT_HEARTBEAT_INTERVAL, 
                         help="Heartbeat interval in seconds (default: 30)")
+    # Database configuration for suppression rules
+    parser.add_argument("--db-host", help="Database host for suppression rules")
+    parser.add_argument("--db-name", help="Database name for suppression rules")
+    parser.add_argument("--db-user", help="Database user for suppression rules")
+    parser.add_argument("--db-password", help="Database password for suppression rules")
+    parser.add_argument("--db-port", type=int, default=5432, help="Database port (default: 5432)")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -622,7 +712,12 @@ if __name__ == "__main__":
         telemetry_ws_port=args.telemetry_ws_port,
         node_id=args.node_id,
         telemetry_interval=args.telemetry_interval,
-        heartbeat_interval=args.heartbeat_interval
+        heartbeat_interval=args.heartbeat_interval,
+        db_host=args.db_host,
+        db_name=args.db_name,
+        db_user=args.db_user,
+        db_password=args.db_password,
+        db_port=args.db_port
     )
     daemon.start()
     app = make_app(daemon)
@@ -633,6 +728,10 @@ if __name__ == "__main__":
     logger.info(f"Telemetry interval: {args.telemetry_interval}s")
     logger.info(f"Heartbeat interval: {args.heartbeat_interval}s")
     logger.info(f"Log file: /var/log/resolvix.log")
+    if daemon.suppression_checker:
+        logger.info(f"Suppression rules: ENABLED")
+    else:
+        logger.info(f"Suppression rules: DISABLED")
     try:
         # do not use debug in production
         app.run(host="0.0.0.0", port=args.control_port)
