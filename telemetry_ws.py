@@ -32,6 +32,7 @@ class TelemetryCollector:
         self._last_net = None
         self._last_disk = None
         self._last_time = None
+        self.daemon_ref = None  # Reference to daemon for queue access
         
         # Initialize Alert Manager
         if ALERT_MANAGER_AVAILABLE and api_url:
@@ -220,6 +221,50 @@ class TelemetryCollector:
             "process_count": len(processes),
             "top_memory_processes": top_processes
         }
+    
+    def _transform_to_api_format(self, ws_metrics):
+        """
+        Transform WebSocket format to API POST format.
+        
+        Args:
+            ws_metrics: Metrics in WebSocket format
+            
+        Returns:
+            dict: Metrics in API format
+        """
+        metrics = ws_metrics.get('metrics', {})
+        
+        # Get primary disk usage (usually "/")
+        disk_usage = metrics.get('disk', {}).get('disk_usage', {})
+        primary_disk = disk_usage.get('/', disk_usage.get(list(disk_usage.keys())[0] if disk_usage else '/'))
+        
+        # Calculate uptime
+        try:
+            uptime_seconds = int(time.time() - psutil.boot_time())
+        except:
+            uptime_seconds = 0
+        
+        return {
+            'node_id': ws_metrics.get('node_id', 'unknown'),
+            'timestamp': ws_metrics.get('timestamp', datetime.utcnow().isoformat() + 'Z'),
+            'cpu_percent': float(metrics.get('cpu', {}).get('cpu_usage_percent', 0)),
+            'memory_percent': float(metrics.get('memory', {}).get('memory_usage_percent', 0)),
+            'memory_used_mb': int(metrics.get('memory', {}).get('memory_used_gb', 0) * 1024),
+            'memory_total_mb': int(metrics.get('memory', {}).get('memory_total_gb', 0) * 1024),
+            'disk_percent': float(primary_disk.get('usage_percent', 0) if primary_disk else 0),
+            'disk_used_gb': float(primary_disk.get('used_gb', 0) if primary_disk else 0),
+            'disk_total_gb': float(primary_disk.get('total_gb', 0) if primary_disk else 0),
+            'network_rx_bytes': int(metrics.get('network', {}).get('packets_recv', 0)),
+            'network_tx_bytes': int(metrics.get('network', {}).get('packets_sent', 0)),
+            'network_rx_rate_mbps': float(metrics.get('network', {}).get('bytes_recv_mb_per_sec', 0)),
+            'network_tx_rate_mbps': float(metrics.get('network', {}).get('bytes_sent_mb_per_sec', 0)),
+            'uptime_seconds': uptime_seconds,
+            'process_count': int(metrics.get('processes', {}).get('process_count', 0)),
+            'active_connections': int(metrics.get('network', {}).get('active_connections', 0)),
+            'load_avg_1m': float(metrics.get('cpu', {}).get('load_avg_1min', 0)),
+            'load_avg_5m': float(metrics.get('cpu', {}).get('load_avg_5min', 0)),
+            'load_avg_15m': float(metrics.get('cpu', {}).get('load_avg_15min', 0))
+        }
 
 
 class TelemetryWebSocketServer:
@@ -258,15 +303,29 @@ class TelemetryWebSocketServer:
         
         while self.running:
             try:
+                # Collect metrics
+                metrics = self.collector.collect_all_metrics()
+                message = json.dumps(metrics)
+                
+                # Broadcast to WebSocket clients
                 if self.clients:
-                    metrics = self.collector.collect_all_metrics()
-                    message = json.dumps(metrics)
-                    
-                    if self.clients:
-                        await asyncio.gather(
-                            *[self.send_to_client(client, message) for client in self.clients],
-                            return_exceptions=True
-                        )
+                    await asyncio.gather(
+                        *[self.send_to_client(client, message) for client in self.clients],
+                        return_exceptions=True
+                    )
+                
+                # Enqueue for HTTP POST (new functionality)
+                if hasattr(self, 'telemetry_queue') and self.telemetry_queue:
+                    try:
+                        # Transform to API format
+                        api_payload = self.collector._transform_to_api_format(metrics)
+                        
+                        # Enqueue for HTTP POST
+                        self.telemetry_queue.enqueue(api_payload)
+                        print("[telemetry-ws] Enqueued snapshot for HTTP POST")
+                    except Exception as e:
+                        print(f"[telemetry-ws] Error enqueueing for HTTP POST: {e}")
+                        # Don't fail - WebSocket should continue working
                 
                 # Wait for next interval
                 await asyncio.sleep(self.interval)
@@ -339,6 +398,18 @@ class TelemetryWebSocketServer:
             node_id=self.node_id,
             interval=self.interval
         )
+        
+        # Try to initialize telemetry queue for HTTP POST
+        try:
+            from telemetry_queue import TelemetryQueue
+            self.telemetry_queue = TelemetryQueue(
+                db_path='/var/lib/resolvix/telemetry_queue.db',
+                max_size=1000
+            )
+            print("[telemetry-ws] Telemetry queue initialized for HTTP POST")
+        except Exception as e:
+            print(f"[telemetry-ws] Could not initialize telemetry queue: {e}")
+            self.telemetry_queue = None
         
         # Start the broadcast task
         self.broadcast_task = asyncio.create_task(self.broadcast_telemetry())

@@ -45,6 +45,14 @@ except ImportError:
     SUPPRESSION_CHECKER_AVAILABLE = False
     print("[WARNING] suppression_checker not available - suppression rules disabled")
 
+try:
+    from telemetry_queue import TelemetryQueue
+    from telemetry_poster import TelemetryPoster
+    TELEMETRY_MODULES_AVAILABLE = True
+except ImportError as e:
+    TELEMETRY_MODULES_AVAILABLE = False
+    print(f"[WARNING] Telemetry modules not available: {e}")
+
 RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672";
 QUEUE_NAME = "error_logs_queue";
 
@@ -238,6 +246,35 @@ class LogCollectorDaemon:
         else:
             self.process_monitor = None
             logger.info("[ProcessMonitor] Disabled (module not available)")
+        
+        # Initialize Telemetry Queue and Poster
+        self.telemetry_queue = None
+        self.telemetry_poster = None
+        self.telemetry_post_thread = None
+        if TELEMETRY_MODULES_AVAILABLE and self.api_url:
+            try:
+                self.telemetry_queue = TelemetryQueue(
+                    db_path='/var/lib/resolvix/telemetry_queue.db',
+                    max_size=1000
+                )
+                logger.info("[Daemon] Telemetry queue initialized")
+                
+                self.telemetry_poster = TelemetryPoster(
+                    backend_url=self.api_url,
+                    jwt_token=None,  # Add JWT token parameter if needed
+                    retry_backoff=[5, 15, 60],
+                    timeout=10
+                )
+                logger.info("[Daemon] Telemetry poster initialized")
+            except Exception as e:
+                logger.error(f"[Daemon] Failed to initialize telemetry system: {e}")
+                self.telemetry_queue = None
+                self.telemetry_poster = None
+        else:
+            if not TELEMETRY_MODULES_AVAILABLE:
+                logger.info("[Daemon] Telemetry modules not available")
+            elif not self.api_url:
+                logger.info("[Daemon] Telemetry disabled (no API URL)")
 
     def start(self):
         # starts background thread for monitoring
@@ -250,6 +287,16 @@ class LogCollectorDaemon:
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
         logger.info(f"Heartbeat started (interval: {self.heartbeat_interval}s)")
+        
+        # start telemetry POST thread if enabled
+        if self.telemetry_queue and self.telemetry_poster:
+            self.telemetry_post_thread = threading.Thread(
+                target=self._telemetry_post_loop,
+                daemon=True,
+                name='TelemetryPoster'
+            )
+            self.telemetry_post_thread.start()
+            logger.info("[Daemon] Telemetry POST thread started")
 
     def stop(self):
         self._stop_flag.set()
@@ -274,6 +321,61 @@ class LogCollectorDaemon:
                 return tail_lines_from_file(f, lines)
         except Exception:
             return []
+    
+    def _telemetry_post_loop(self):
+        """
+        Background thread to POST queued telemetry snapshots.
+        Runs continuously while daemon is running.
+        """
+        logger.info("[TelemetryPoster] POST loop started")
+        
+        while not self._stop_flag.is_set():
+            try:
+                if not self.telemetry_queue or not self.telemetry_poster:
+                    logger.warning("[TelemetryPoster] Queue or poster not initialized, sleeping...")
+                    time.sleep(60)
+                    continue
+                
+                # Get batch of snapshots to send
+                snapshots = self.telemetry_queue.dequeue(limit=10)
+                
+                if not snapshots:
+                    # Queue empty - wait before checking again
+                    time.sleep(60)
+                    continue
+                
+                logger.info(f"[TelemetryPoster] Processing {len(snapshots)} queued snapshots")
+                
+                # Process each snapshot
+                for snapshot_id, payload, retry_count in snapshots:
+                    try:
+                        # POST with retry
+                        success = self.telemetry_poster.post_with_retry(payload, retry_count)
+                        
+                        if success:
+                            # Remove from queue
+                            self.telemetry_queue.mark_sent(snapshot_id)
+                        else:
+                            # Mark as failed (will retry or drop based on retry count)
+                            self.telemetry_queue.mark_failed(snapshot_id, max_retries=3)
+                    
+                    except Exception as e:
+                        logger.error(f"[TelemetryPoster] Error processing snapshot {snapshot_id}: {e}")
+                        self.telemetry_queue.mark_failed(snapshot_id, max_retries=3)
+                
+                # Log queue statistics every iteration
+                queue_size = self.telemetry_queue.get_queue_size()
+                if queue_size > 0:
+                    logger.info(f"[TelemetryPoster] Queue size: {queue_size}")
+                
+                # Wait before next batch
+                time.sleep(60)
+            
+            except Exception as e:
+                logger.error(f"[TelemetryPoster] Error in POST loop: {e}")
+                time.sleep(60)
+        
+        logger.info("[TelemetryPoster] POST loop stopped")
 
     def _heartbeat_loop(self):
         """Send periodic heartbeat to backend"""
