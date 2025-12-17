@@ -1,9 +1,10 @@
 # 🚀 QUICK DEPLOYMENT REFERENCE
 
 ## Files to Deploy (4 files):
+
 ```
 ✅ telemetry_queue.py
-✅ telemetry_poster.py  
+✅ telemetry_poster.py
 ✅ log_collector_daemon.py
 ✅ telemetry_ws.py
 ```
@@ -22,6 +23,7 @@ sudo nano /etc/systemd/system/resolvix-daemon.service
 ```
 
 **Add to ExecStart:**
+
 ```
 --telemetry-backend-url http://localhost:3000 \
 --telemetry-jwt-token YOUR_JWT_TOKEN_HERE

@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User={USER}
 WorkingDirectory={PROJECT_DIR}
-ExecStart={PROJECT_DIR}/venv/bin/python {PROJECT_DIR}/log_collector_daemon.py --log-file "{LOG_FILE_PATH}"
+ExecStart={PROJECT_DIR}/venv/bin/python {PROJECT_DIR}/log_collector_daemon.py --log-file "{LOG_FILE_PATH}" --api-url "{API_URL}" --telemetry-backend-url "{TELEMETRY_BACKEND_URL}"
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/resolvix.log

@@ -8,6 +8,7 @@
 ## 📦 WHAT TO DEPLOY
 
 ### Files to Copy to Server:
+
 1. ✅ `telemetry_queue.py` - SQLite queue manager
 2. ✅ `telemetry_poster.py` - HTTP POST client
 3. ✅ `log_collector_daemon.py` - Updated main daemon
@@ -41,17 +42,20 @@ sudo chmod 755 /var/lib/resolvix
 ### 3. Update Systemd Service
 
 Edit the service file:
+
 ```bash
 sudo nano /etc/systemd/system/resolvix-daemon.service
 ```
 
 **ADD** these two flags to the `ExecStart` line:
+
 ```ini
 --telemetry-backend-url http://localhost:3000 \
 --telemetry-jwt-token YOUR_JWT_TOKEN_HERE
 ```
 
 **Example service file:**
+
 ```ini
 [Unit]
 Description=Resolvix Log Collector Daemon
@@ -78,6 +82,7 @@ WantedBy=multi-user.target
 ```
 
 **Important parameters:**
+
 - `--telemetry-backend-url`: Your backend URL (e.g., `http://localhost:3000`)
 - `--telemetry-jwt-token`: Your JWT authentication token
 - `--telemetry-interval`: Snapshot frequency in seconds (default: 60)
@@ -108,6 +113,7 @@ sudo journalctl -u resolvix-daemon -f
 ```
 
 **Look for these lines:**
+
 ```
 [Daemon] Telemetry queue initialized
 [Daemon] Telemetry poster initialized (backend=http://localhost:3000)
@@ -133,6 +139,7 @@ python3 -c "from telemetry_queue import TelemetryQueue; import json; q = Telemet
 ```
 
 **Expected output:**
+
 ```json
 {
   "total": 5,
@@ -150,6 +157,7 @@ sudo journalctl -u resolvix-daemon -f | grep -E 'Telemetry|POST'
 ```
 
 **Should see every ~60 seconds:**
+
 ```
 [telemetry-ws] Enqueued snapshot for HTTP POST
 [TelemetryPoster] Processing 1 queued snapshots
@@ -161,8 +169,8 @@ sudo journalctl -u resolvix-daemon -f | grep -E 'Telemetry|POST'
 On your backend server, check the database:
 
 ```sql
-SELECT 
-    node_id, 
+SELECT
+    node_id,
     COUNT(*) as snapshots,
     MAX(timestamp) as latest_snapshot
 FROM telemetry_history
@@ -171,6 +179,7 @@ GROUP BY node_id;
 ```
 
 Or check backend logs:
+
 ```bash
 # If using pm2
 pm2 logs | grep telemetry
@@ -186,11 +195,13 @@ sudo journalctl -u your-backend-service -f | grep telemetry
 ### Issue: Daemon won't start
 
 **Check logs:**
+
 ```bash
 sudo journalctl -u resolvix-daemon -n 50
 ```
 
 **Common fixes:**
+
 - Missing Python modules: `pip3 install requests psutil`
 - Wrong file permissions: `chmod +x /home/bitnami/log-horizon-daemon/log_collector_daemon.py`
 - Syntax errors: `python3 -m py_compile log_collector_daemon.py`
@@ -198,6 +209,7 @@ sudo journalctl -u resolvix-daemon -n 50
 ### Issue: Queue growing but nothing being POSTed
 
 **Check backend connectivity:**
+
 ```bash
 curl -X POST http://localhost:3000/api/telemetry/snapshot \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
@@ -206,6 +218,7 @@ curl -X POST http://localhost:3000/api/telemetry/snapshot \
 ```
 
 **Common causes:**
+
 - Backend not running: `systemctl status your-backend-service`
 - Wrong backend URL in service file
 - Invalid/expired JWT token
@@ -216,6 +229,7 @@ curl -X POST http://localhost:3000/api/telemetry/snapshot \
 **Cause:** Invalid or expired JWT token
 
 **Fix:**
+
 1. Get a new JWT token from your auth endpoint
 2. Update service file with new token
 3. Restart daemon: `sudo systemctl restart resolvix-daemon`
@@ -223,11 +237,13 @@ curl -X POST http://localhost:3000/api/telemetry/snapshot \
 ### Issue: Queue too large
 
 **Check size:**
+
 ```bash
 python3 -c "from telemetry_queue import TelemetryQueue; print(f'Queue size: {TelemetryQueue().get_queue_size()}')"
 ```
 
 **If too large (>100), clear it:**
+
 ```bash
 python3 << 'EOF'
 import sqlite3
@@ -242,6 +258,7 @@ EOF
 ### Issue: WebSocket not working anymore
 
 **Test WebSocket:**
+
 ```bash
 wscat -c ws://localhost:8756
 ```
@@ -249,6 +266,7 @@ wscat -c ws://localhost:8756
 **Should see:** Metrics streaming every 60 seconds
 
 **If broken:**
+
 - Check if telemetry_ws.py process is running: `ps aux | grep telemetry_ws`
 - Restart daemon: `sudo systemctl restart resolvix-daemon`
 
@@ -259,21 +277,25 @@ wscat -c ws://localhost:8756
 ### Commands to Run Regularly
 
 **Check daemon status:**
+
 ```bash
 sudo systemctl status resolvix-daemon
 ```
 
 **Check queue size:**
+
 ```bash
 python3 -c "from telemetry_queue import TelemetryQueue; print(TelemetryQueue().get_queue_size())"
 ```
 
 **Check latest logs:**
+
 ```bash
 sudo journalctl -u resolvix-daemon --since "5 minutes ago" | tail -50
 ```
 
 **Check POST activity:**
+
 ```bash
 sudo journalctl -u resolvix-daemon --since "5 minutes ago" | grep -i "POST\|telemetry"
 ```
@@ -284,7 +306,7 @@ sudo journalctl -u resolvix-daemon --since "5 minutes ago" | grep -i "POST\|tele
 ✅ **POST success rate** - Check for "Successfully posted" messages  
 ✅ **Backend receiving data** - Verify in database  
 ✅ **WebSocket still working** - Test with wscat  
-✅ **Disk space** - Queue database grows if backend down  
+✅ **Disk space** - Queue database grows if backend down
 
 ---
 

@@ -7,15 +7,20 @@ API_URL="$2"
 SYSTEM_INFO_URL="$3"
 AUTH_TOKEN="$4"
 BACKEND_PUBLIC_KEY="$5"  # Backend's SSH public key for file browser
+TELEMETRY_BACKEND_URL="$6"  # Telemetry backend URL for historical data
 
 # Provide defaults if arguments are missing
 LOG_FILE=${LOG_FILE:-/var/log/syslog}
 API_URL=${API_URL:-http://13.235.113.192:3000/api/ticket}
 SYSTEM_INFO_URL=${SYSTEM_INFO_URL:-http://13.235.113.192:3000/api/system_info}
+# Extract base URL from API_URL for telemetry (remove /api/ticket)
+BASE_URL=$(echo "$API_URL" | sed 's/\/api\/ticket$//')
+TELEMETRY_BACKEND_URL=${TELEMETRY_BACKEND_URL:-$BASE_URL}
 
 echo "[Installer] Log file: $LOG_FILE"
 echo "[Installer] API URL: $API_URL"
 echo "[Installer] System Info URL: $SYSTEM_INFO_URL"
+echo "[Installer] Telemetry Backend URL: $TELEMETRY_BACKEND_URL"
 if [ -n "$AUTH_TOKEN" ]; then
   echo "[Installer] Auth token: ${AUTH_TOKEN:0:20}..."
 fi
@@ -190,7 +195,7 @@ After=network.target
 [Service]
 User=$(whoami)
 WorkingDirectory=${WORK_DIR}
-ExecStart=${PYTHON_PATH} ${WORK_DIR}/log_collector_daemon.py --log-file "${LOG_FILE}" --api-url "${API_URL}"
+ExecStart=${PYTHON_PATH} ${WORK_DIR}/log_collector_daemon.py --log-file "${LOG_FILE}" --api-url "${API_URL}" --telemetry-backend-url "${TELEMETRY_BACKEND_URL}"
 Restart=always
 RestartSec=10
 Environment=PATH=${WORK_DIR}/venv/bin
