@@ -136,6 +136,23 @@ try:
     
     if resp.status_code == 200 or resp.status_code == 201:
         print("✅ System info sent successfully")
+        
+        # Extract machine ID from response and save to system_info.json
+        try:
+            response_data = resp.json()
+            if 'system_info' in response_data and 'id' in response_data['system_info']:
+                machine_id = response_data['system_info']['id']
+                system_info['id'] = machine_id
+                
+                with open("system_info.json", "w") as f:
+                    json.dump(system_info, f, indent=2)
+                
+                print(f"✅ Machine UUID saved: {machine_id}")
+            else:
+                print("⚠️  Warning: No machine ID in response")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not save machine ID: {e}")
+        
         sys.exit(0)
     else:
         print(f"❌ Failed to send system info: HTTP {resp.status_code}")
