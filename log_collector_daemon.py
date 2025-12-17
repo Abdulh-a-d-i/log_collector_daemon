@@ -171,7 +171,8 @@ class LogCollectorDaemon:
                  telemetry_ws_port=DEFAULT_TELEMETRY_WS_PORT, node_id=None, 
                  interval=1, tail_lines=200, telemetry_interval=DEFAULT_TELEMETRY_INTERVAL,
                  heartbeat_interval=DEFAULT_HEARTBEAT_INTERVAL,
-                 db_host=None, db_name=None, db_user=None, db_password=None, db_port=5432):
+                 db_host=None, db_name=None, db_user=None, db_password=None, db_port=5432,
+                 telemetry_backend_url=None, telemetry_jwt_token=None):
         self.log_file = os.path.abspath(log_file)
         self.api_url = api_url.rstrip("/") if api_url else None
         self.ws_port = int(ws_port)
@@ -251,7 +252,10 @@ class LogCollectorDaemon:
         self.telemetry_queue = None
         self.telemetry_poster = None
         self.telemetry_post_thread = None
-        if TELEMETRY_MODULES_AVAILABLE and self.api_url:
+        self.telemetry_backend_url = telemetry_backend_url or self.api_url
+        self.telemetry_jwt_token = telemetry_jwt_token
+        
+        if TELEMETRY_MODULES_AVAILABLE and self.telemetry_backend_url:
             try:
                 self.telemetry_queue = TelemetryQueue(
                     db_path='/var/lib/resolvix/telemetry_queue.db',
@@ -260,12 +264,12 @@ class LogCollectorDaemon:
                 logger.info("[Daemon] Telemetry queue initialized")
                 
                 self.telemetry_poster = TelemetryPoster(
-                    backend_url=self.api_url,
-                    jwt_token=None,  # Add JWT token parameter if needed
+                    backend_url=self.telemetry_backend_url,
+                    jwt_token=self.telemetry_jwt_token,
                     retry_backoff=[5, 15, 60],
                     timeout=10
                 )
-                logger.info("[Daemon] Telemetry poster initialized")
+                logger.info(f"[Daemon] Telemetry poster initialized (backend={self.telemetry_backend_url})")
             except Exception as e:
                 logger.error(f"[Daemon] Failed to initialize telemetry system: {e}")
                 self.telemetry_queue = None
@@ -273,8 +277,8 @@ class LogCollectorDaemon:
         else:
             if not TELEMETRY_MODULES_AVAILABLE:
                 logger.info("[Daemon] Telemetry modules not available")
-            elif not self.api_url:
-                logger.info("[Daemon] Telemetry disabled (no API URL)")
+            elif not self.telemetry_backend_url:
+                logger.info("[Daemon] Telemetry disabled (no backend URL)")
 
     def start(self):
         # starts background thread for monitoring
@@ -794,6 +798,9 @@ def parse_args():
                         help="Telemetry collection interval in seconds (default: 3)")
     parser.add_argument("--heartbeat-interval", type=int, default=DEFAULT_HEARTBEAT_INTERVAL, 
                         help="Heartbeat interval in seconds (default: 30)")
+    # Telemetry backend configuration
+    parser.add_argument("--telemetry-backend-url", help="Backend URL for telemetry POST (e.g., http://localhost:3000)")
+    parser.add_argument("--telemetry-jwt-token", help="JWT token for telemetry authentication")
     # Database configuration for suppression rules
     parser.add_argument("--db-host", help="Database host for suppression rules")
     parser.add_argument("--db-name", help="Database name for suppression rules")
@@ -819,7 +826,9 @@ if __name__ == "__main__":
         db_name=args.db_name,
         db_user=args.db_user,
         db_password=args.db_password,
-        db_port=args.db_port
+        db_port=args.db_port,
+        telemetry_backend_url=args.telemetry_backend_url,
+        telemetry_jwt_token=args.telemetry_jwt_token
     )
     daemon.start()
     app = make_app(daemon)

@@ -8,11 +8,13 @@
 ## 📦 FILES CREATED/MODIFIED
 
 ### New Files Created:
+
 1. ✅ **telemetry_queue.py** - SQLite-based persistent queue manager
 2. ✅ **telemetry_poster.py** - HTTP POST client with retry logic
 3. ✅ **test_telemetry_implementation.py** - Test suite
 
 ### Files Modified:
+
 4. ✅ **log_collector_daemon.py** - Integrated queue & poster, added POST loop
 5. ✅ **telemetry_ws.py** - Added queue enqueueing alongside WebSocket streaming
 
@@ -23,6 +25,7 @@
 ### What Was Implemented:
 
 #### 1. **Telemetry Queue Manager** (`telemetry_queue.py`)
+
 - SQLite-based persistent storage
 - FIFO ordering (oldest first)
 - Automatic size management (max 1000 entries)
@@ -31,6 +34,7 @@
 - Statistics and monitoring methods
 
 **Key Features:**
+
 ```python
 queue = TelemetryQueue(db_path='/var/lib/resolvix/telemetry_queue.db', max_size=1000)
 entry_id = queue.enqueue(payload)
@@ -41,6 +45,7 @@ stats = queue.get_stats()
 ```
 
 #### 2. **Telemetry HTTP Poster** (`telemetry_poster.py`)
+
 - HTTP POST with exponential backoff retry
 - Connection pooling for efficiency
 - Error classification (retry vs drop)
@@ -48,6 +53,7 @@ stats = queue.get_stats()
 - Graceful error handling
 
 **Key Features:**
+
 ```python
 poster = TelemetryPoster(
     backend_url='http://backend:5001',
@@ -60,12 +66,14 @@ success = poster.post_with_retry(payload, retry_count=0)
 ```
 
 #### 3. **Main Daemon Integration** (`log_collector_daemon.py`)
+
 - Added telemetry module imports with fallback
 - Initialize queue and poster in `__init__`
 - New background thread `_telemetry_post_loop()` for processing queue
 - Non-breaking: existing functionality preserved
 
 **What Happens:**
+
 1. Daemon starts → initializes queue + poster
 2. Background thread continuously processes queue
 3. Dequeues up to 10 snapshots per cycle
@@ -74,12 +82,14 @@ success = poster.post_with_retry(payload, retry_count=0)
 6. Logs queue statistics
 
 #### 4. **Telemetry WebSocket Integration** (`telemetry_ws.py`)
+
 - Added `_transform_to_api_format()` method to convert metrics
 - Modified `broadcast_telemetry()` to enqueue snapshots
 - Direct queue access (subprocess-compatible)
 - Non-breaking: WebSocket streaming continues as before
 
 **Flow:**
+
 ```
 Collect Metrics → Broadcast to WebSocket Clients (existing)
                 ↓
@@ -134,6 +144,7 @@ Collect Metrics → Broadcast to WebSocket Clients (existing)
 ## 🔄 DATA FLOW
 
 ### WebSocket Format (unchanged):
+
 ```json
 {
   "timestamp": "2025-12-17T10:00:00Z",
@@ -149,6 +160,7 @@ Collect Metrics → Broadcast to WebSocket Clients (existing)
 ```
 
 ### API POST Format (new):
+
 ```json
 {
   "node_id": "192.168.100.27",
@@ -178,12 +190,14 @@ Collect Metrics → Broadcast to WebSocket Clients (existing)
 ## 🧪 TESTING
 
 ### Run Test Suite:
+
 ```bash
 cd c:\Users\hp\Desktop\log_collector_daemon
 python test_telemetry_implementation.py
 ```
 
 ### Expected Output:
+
 ```
 ============================================================
 TELEMETRY IMPLEMENTATION TEST SUITE
@@ -232,6 +246,7 @@ Integration          ✅ PASS
 ### For Linux Production Deployment:
 
 #### 1. **Copy Files to Server:**
+
 ```bash
 scp telemetry_queue.py bitnami@<node>:/home/bitnami/log-horizon-daemon/
 scp telemetry_poster.py bitnami@<node>:/home/bitnami/log-horizon-daemon/
@@ -240,22 +255,26 @@ scp telemetry_ws.py bitnami@<node>:/home/bitnami/log-horizon-daemon/
 ```
 
 #### 2. **Create Queue Directory:**
+
 ```bash
 sudo mkdir -p /var/lib/resolvix
 sudo chown bitnami:bitnami /var/lib/resolvix
 ```
 
 #### 3. **Restart Daemon:**
+
 ```bash
 sudo systemctl restart resolvix-daemon
 ```
 
 #### 4. **Verify Initialization:**
+
 ```bash
 sudo journalctl -u resolvix-daemon -f | grep -i telemetry
 ```
 
 **Look for:**
+
 - ✅ `[Daemon] Telemetry queue initialized`
 - ✅ `[Daemon] Telemetry poster initialized`
 - ✅ `[Daemon] Telemetry POST thread started`
@@ -264,11 +283,13 @@ sudo journalctl -u resolvix-daemon -f | grep -i telemetry
 - ✅ `[telemetry-ws] Enqueued snapshot for HTTP POST`
 
 #### 5. **Monitor Queue:**
+
 ```bash
 python3 -c "from telemetry_queue import TelemetryQueue; q = TelemetryQueue(); print(f'Queue size: {q.get_queue_size()}'); print(q.get_stats())"
 ```
 
 #### 6. **Test WebSocket Still Works:**
+
 ```bash
 wscat -c ws://localhost:8756
 # Should see metrics streaming every 60s
@@ -315,7 +336,9 @@ psql -d log_collector -c "SELECT node_id, COUNT(*) FROM telemetry_history WHERE 
 ## 🔧 TROUBLESHOOTING
 
 ### Issue: Queue not initializing
+
 **Solution:**
+
 ```bash
 # Check permissions
 sudo chown -R bitnami:bitnami /var/lib/resolvix
@@ -323,21 +346,27 @@ sudo chmod 755 /var/lib/resolvix
 ```
 
 ### Issue: POST failing with connection error
+
 **Expected:** Queue will grow and retry later  
 **Verify:**
+
 ```bash
 python3 -c "from telemetry_queue import TelemetryQueue; print(f'Queue size: {TelemetryQueue().get_queue_size()}')"
 ```
 
 ### Issue: WebSocket not streaming
+
 **Check:**
+
 ```bash
 ps aux | grep telemetry_ws
 sudo journalctl -u resolvix-daemon | grep telemetry-ws
 ```
 
 ### Issue: Queue growing too large
+
 **Emergency drain:**
+
 ```bash
 python3 << 'EOF'
 from telemetry_queue import TelemetryQueue
@@ -358,16 +387,19 @@ EOF
 ## 🎉 SUCCESS CRITERIA
 
 ✅ **Implementation Complete**
+
 - All 4 tasks completed
 - No syntax errors
 - Test suite passes
 
 ✅ **Non-Breaking**
+
 - WebSocket streaming continues working
 - Heartbeat continues working
 - Existing log collection continues working
 
 ✅ **New Functionality**
+
 - Telemetry snapshots enqueued to SQLite
 - Background thread processes queue
 - HTTP POST with retry logic
@@ -378,6 +410,7 @@ EOF
 ## 📚 NEXT STEPS
 
 1. **Test on Windows (current environment):**
+
    ```powershell
    python test_telemetry_implementation.py
    ```
@@ -385,6 +418,7 @@ EOF
 2. **Deploy to Linux nodes** (use DAEMON_TELEMETRY_IMPLEMENTATION.md)
 
 3. **Monitor for 24 hours:**
+
    - Check logs every 2 hours
    - Monitor queue size
    - Verify backend receiving data
