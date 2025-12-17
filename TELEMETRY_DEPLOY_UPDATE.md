@@ -3,18 +3,23 @@
 ## Changes Made
 
 ### 1. Removed JWT Token Requirement ✅
+
 - JWT token is now **optional** (not required)
 - Suitable for automated machine deployments
 - Telemetry works without authentication
 
 ### 2. Updated Service Template ✅
+
 Service file now includes telemetry backend URL:
+
 ```bash
 ExecStart=... --api-url "{API_URL}" --telemetry-backend-url "{TELEMETRY_BACKEND_URL}"
 ```
 
 ### 3. Updated Install Script ✅
+
 `install.sh` now:
+
 - Accepts `TELEMETRY_BACKEND_URL` as 6th parameter
 - Auto-extracts base URL from API_URL if not provided
 - Generates service file with `--telemetry-backend-url` parameter
@@ -52,11 +57,13 @@ sudo journalctl -u resolvix -f | grep -i telemetry
 ### Option 2: Fresh Installation
 
 If reinstalling:
+
 ```bash
 ./install.sh /var/log/syslog "http://192.168.1.2:3000/api/ticket" "http://192.168.1.2:3000/api/system_info" "" "" "http://192.168.1.2:3000"
 ```
 
 Parameters:
+
 1. LOG_FILE: `/var/log/syslog`
 2. API_URL: `http://192.168.1.2:3000/api/ticket`
 3. SYSTEM_INFO_URL: `http://192.168.1.2:3000/api/system_info`
@@ -91,6 +98,7 @@ python3 -c "from telemetry_queue import TelemetryQueue; import json; print(json.
 ## Troubleshooting
 
 ### If queue not decreasing:
+
 ```bash
 # Check if POST loop started
 sudo journalctl -u resolvix | grep "Starting telemetry post loop"
@@ -103,6 +111,7 @@ grep "ExecStart" /etc/systemd/system/resolvix.service
 ```
 
 ### If backend not receiving data:
+
 ```bash
 # Test manual POST
 curl -X POST http://192.168.1.2:3000/api/telemetry/snapshot \

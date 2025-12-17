@@ -14,6 +14,7 @@ from datetime import datetime
 import psutil
 import time
 import socket
+import uuid
 
 # Import AlertManager with fallback
 try:
@@ -33,6 +34,9 @@ class TelemetryCollector:
         self._last_disk = None
         self._last_time = None
         self.daemon_ref = None  # Reference to daemon for queue access
+        
+        # Generate machine UUID from MAC address (consistent across restarts)
+        self.machine_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(uuid.getnode())))
         
         # Initialize Alert Manager
         if ALERT_MANAGER_AVAILABLE and api_url:
@@ -245,7 +249,7 @@ class TelemetryCollector:
             uptime_seconds = 0
         
         return {
-            'node_id': ws_metrics.get('node_id', 'unknown'),
+            'machine_id': self.machine_id,  # UUID format for backend
             'timestamp': ws_metrics.get('timestamp', datetime.utcnow().isoformat() + 'Z'),
             'cpu_percent': float(metrics.get('cpu', {}).get('cpu_usage_percent', 0)),
             'memory_percent': float(metrics.get('memory', {}).get('memory_usage_percent', 0)),
