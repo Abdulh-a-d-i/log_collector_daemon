@@ -26,7 +26,7 @@ except ImportError:
 
 class TelemetryCollector:
     """Collects system telemetry metrics"""
-    def __init__(self, api_url, node_id, interval=60):
+    def __init__(self, api_url, node_id, interval=60, machine_uuid=None):
         self.api_url = api_url
         self.node_id = node_id
         self.interval = interval
@@ -35,8 +35,8 @@ class TelemetryCollector:
         self._last_time = None
         self.daemon_ref = None  # Reference to daemon for queue access
         
-        # Generate machine UUID from MAC address (consistent across restarts)
-        self.machine_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(uuid.getnode())))
+        # Use provided machine UUID or generate from MAC address as fallback
+        self.machine_id = machine_uuid or str(uuid.uuid5(uuid.NAMESPACE_DNS, str(uuid.getnode())))
         
         # Initialize Alert Manager
         if ALERT_MANAGER_AVAILABLE and api_url:
@@ -272,10 +272,11 @@ class TelemetryCollector:
 
 
 class TelemetryWebSocketServer:
-    def __init__(self, node_id: str, port: int, interval: int = 60):
+    def __init__(self, node_id: str, port: int, interval: int = 60, machine_uuid: str = None):
         self.node_id = node_id
         self.port = port
         self.interval = interval
+        self.machine_uuid = machine_uuid
         self.clients = set()
         self.collector = None
         self.running = False
@@ -400,7 +401,8 @@ class TelemetryWebSocketServer:
         self.collector = TelemetryCollector(
             api_url="",  # No API URL needed for WS mode
             node_id=self.node_id,
-            interval=self.interval
+            interval=self.interval,
+            machine_uuid=self.machine_uuid
         )
         
         # Try to initialize telemetry queue for HTTP POST
@@ -461,6 +463,12 @@ def parse_args():
         default=60,
         help="Telemetry collection interval in seconds (default: 60)"
     )
+    parser.add_argument(
+        "--machine-uuid",
+        type=str,
+        default=None,
+        help="Machine UUID from registration (optional)"
+    )
     return parser.parse_args()
 
 
@@ -475,7 +483,8 @@ async def main():
     server = TelemetryWebSocketServer(
         node_id=args.node_id,
         port=args.port,
-        interval=args.interval
+        interval=args.interval,
+        machine_uuid=args.machine_uuid
     )
     
     try:

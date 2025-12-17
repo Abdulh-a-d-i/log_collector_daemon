@@ -165,6 +165,54 @@ def parse_timestamp(line: str) -> str:
             pass
     return datetime.utcnow().isoformat() + "Z"
 
+# -------- Helper function to get machine UUID --------
+def get_machine_uuid(api_url=None):
+    """
+    Get the machine's registered UUID from system_info.json or backend API.
+    Returns the UUID string or generates one from MAC as fallback.
+    """
+    # Try reading from system_info.json
+    try:
+        if os.path.exists('system_info.json'):
+            with open('system_info.json', 'r') as f:
+                data = json.load(f)
+                if 'id' in data:
+                    logger.info(f"[MachineUUID] Loaded from system_info.json: {data['id']}")
+                    return data['id']
+    except Exception as e:
+        logger.warning(f"[MachineUUID] Could not read system_info.json: {e}")
+    
+    # Try fetching from backend API using hostname/IP
+    if api_url:
+        try:
+            hostname = socket.gethostname()
+            ip_address = get_node_id()
+            
+            # Query backend for machine by hostname or IP
+            base_url = api_url.rsplit('/api/', 1)[0] if '/api/' in api_url else api_url
+            response = requests.get(
+                f"{base_url}/api/system_info",
+                params={'hostname': hostname},
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    machine_id = data[0].get('id')
+                    if machine_id:
+                        logger.info(f"[MachineUUID] Fetched from backend: {machine_id}")
+                        return machine_id
+                elif isinstance(data, dict) and 'id' in data:
+                    logger.info(f"[MachineUUID] Fetched from backend: {data['id']}")
+                    return data['id']
+        except Exception as e:
+            logger.warning(f"[MachineUUID] Could not fetch from backend: {e}")
+    
+    # Fallback: generate UUID from MAC address
+    fallback_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(uuid.getnode())))
+    logger.warning(f"[MachineUUID] Using fallback UUID from MAC: {fallback_uuid}")
+    return fallback_uuid
+
 # -------- Daemon class --------
 class LogCollectorDaemon:
     def __init__(self, log_file, api_url, ws_port=DEFAULT_WS_PORT, 
@@ -189,6 +237,9 @@ class LogCollectorDaemon:
         self._telemetry_proc = None  # subprocess for telemetry_ws.py
         self._live_lock = threading.Lock()
         self._telemetry_lock = threading.Lock()
+        
+        # Get machine UUID
+        self.machine_uuid = get_machine_uuid(self.api_url)
 
         # compiled keyword regex for faster matching
         kw = "|".join(re.escape(k) for k in ERROR_KEYWORDS)
@@ -534,7 +585,8 @@ class LogCollectorDaemon:
                 sys.executable, script, 
                 self.node_id, 
                 str(self.telemetry_ws_port),
-                "--interval", str(self.telemetry_interval)
+                "--interval", str(self.telemetry_interval),
+                "--machine-uuid", self.machine_uuid
             ]
             try:
                 self._telemetry_proc = subprocess.Popen(cmd, preexec_fn=os.setsid)
