@@ -117,12 +117,58 @@ ERROR_KEYWORDS = [
 
 # -------- helpers --------
 def get_node_id():
+    """
+    Get the node identifier (IP address).
+    Never returns 127.0.0.1 or localhost IPs.
+    """
+    # Method 1: Try to get IP by connecting to external address (doesn't actually send data)
     try:
-        # prefer an IP if possible
-        ip = socket.gethostbyname(socket.gethostname())
-        return ip
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        # Connect to Google DNS (8.8.8.8) - doesn't send any data
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and ip != "127.0.0.1" and not ip.startswith("127."):
+            return ip
     except Exception:
-        return socket.gethostname()
+        pass
+    
+    # Method 2: Try hostname resolution
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        if ip and ip != "127.0.0.1" and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    
+    # Method 3: Get all network interfaces and pick first non-localhost
+    try:
+        import netifaces
+        for interface in netifaces.interfaces():
+            addrs = netifaces.ifaddresses(interface)
+            if netifaces.AF_INET in addrs:
+                for addr in addrs[netifaces.AF_INET]:
+                    ip = addr.get('addr')
+                    if ip and ip != "127.0.0.1" and not ip.startswith("127."):
+                        return ip
+    except ImportError:
+        pass  # netifaces not available, skip this method
+    except Exception:
+        pass
+    
+    # Method 4: Use hostname as last resort (not ideal but better than 127.0.0.1)
+    try:
+        hostname = socket.gethostname()
+        if hostname and hostname != "localhost":
+            return hostname
+    except Exception:
+        pass
+    
+    # If all else fails, return a clear error indicator
+    logger.warning("Could not determine node IP address. Using 'unknown-node' as identifier.")
+    return "unknown-node"
 
 def detect_severity(line: str) -> str:
     text = line.lower()

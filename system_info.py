@@ -7,14 +7,49 @@ import json
 from datetime import datetime
 
 def get_ip_address():
+    """
+    Get the actual network IP address.
+    Never returns 127.0.0.1 or localhost IPs.
+    """
+    # Method 1: Connect to external address to determine routing IP
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))  # Connect to a public IP (Google DNS)
+        s.settimeout(2)
+        s.connect(("8.8.8.8", 80))  # Connect to Google DNS (doesn't send data)
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if ip and ip != "127.0.0.1" and not ip.startswith("127."):
+            return ip
     except Exception:
-        return "Not Found"
+        pass
+    
+    # Method 2: Try hostname resolution
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        if ip and ip != "127.0.0.1" and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+    
+    # Method 3: Try all network interfaces
+    try:
+        import netifaces
+        for interface in netifaces.interfaces():
+            if interface.startswith('lo'):  # Skip loopback
+                continue
+            addrs = netifaces.ifaddresses(interface)
+            if netifaces.AF_INET in addrs:
+                for addr in addrs[netifaces.AF_INET]:
+                    ip = addr.get('addr')
+                    if ip and ip != "127.0.0.1" and not ip.startswith("127."):
+                        return ip
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    
+    return "IP_Not_Found"
 
 def get_system_info():
     uname = platform.uname()
