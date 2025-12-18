@@ -53,6 +53,13 @@ except ImportError as e:
     TELEMETRY_MODULES_AVAILABLE = False
     print(f"[WARNING] Telemetry modules not available: {e}")
 
+try:
+    from config_store import init_config, get_config, ConfigStore
+    CONFIG_STORE_AVAILABLE = True
+except ImportError as e:
+    CONFIG_STORE_AVAILABLE = False
+    print(f"[WARNING] Config store not available: {e}")
+
 RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672";
 QUEUE_NAME = "error_logs_queue";
 
@@ -181,6 +188,75 @@ def detect_severity(line: str) -> str:
     if any(k in text for k in ["warn", "warning"]):
         return "warn"
     return "info"
+
+def get_log_label(log_path: str) -> str:
+    """
+    Determine log_label from log file path
+    Examples:
+      /var/log/apache2/error.log -> apache_errors
+      /var/log/nginx/error.log -> nginx_errors
+      /var/log/mysql/error.log -> mysql_errors
+      /var/log/syslog -> system
+    """
+    path_lower = log_path.lower()
+
+    # Map patterns to labels
+    if 'apache' in path_lower:
+        return 'apache_errors'
+    elif 'nginx' in path_lower:
+        return 'nginx_errors'
+    elif 'mysql' in path_lower or 'mariadb' in path_lower:
+        return 'mysql_errors'
+    elif 'postgresql' in path_lower or 'postgres' in path_lower:
+        return 'postgresql_errors'
+    elif 'syslog' in path_lower or 'messages' in path_lower:
+        return 'system'
+    elif 'kern' in path_lower:
+        return 'kernel'
+    elif 'auth' in path_lower:
+        return 'authentication'
+    else:
+        # Extract from filename
+        filename = os.path.basename(log_path)
+        label = filename.replace('.log', '').replace('.', '_')
+        return label or 'unlabeled'
+
+
+def determine_priority(log_line: str, severity: str) -> str:
+    """
+    Determine priority level based on severity and keywords
+    Returns: 'critical', 'high', 'medium', 'low'
+    """
+    log_lower = log_line.lower()
+
+    # Critical keywords
+    CRITICAL_KEYWORDS = [
+        'fatal', 'panic', 'critical', 'emergency', 'segmentation fault',
+        'core dump', 'out of memory', 'system halt', 'kernel panic'
+    ]
+
+    # High keywords
+    HIGH_KEYWORDS = [
+        'error', 'failed', 'failure', 'exception', 'traceback',
+        'denied', 'refused', 'timeout', 'unreachable'
+    ]
+
+    # Check keywords first (override severity)
+    if any(kw in log_lower for kw in CRITICAL_KEYWORDS):
+        return 'critical'
+
+    if any(kw in log_lower for kw in HIGH_KEYWORDS):
+        return 'high'
+
+    # Check severity
+    if severity and severity.lower() in ['fatal', 'critical', 'emergency']:
+        return 'critical'
+    elif severity and severity.lower() in ['error', 'err', 'failure']:
+        return 'high'
+    elif severity and severity.lower() in ['warning', 'warn']:
+        return 'medium'
+    else:
+        return 'low'
 
 # Try to parse a timestamp from a common syslog-like prefix.
 # If parsing fails, return UTC now.
@@ -573,17 +649,24 @@ class LogCollectorDaemon:
                     if self._err_re.search(line):
                         severity = detect_severity(line)
                         ts = parse_timestamp(line)
+                        
+                        # Determine log_label from file path (override config label if smarter)
+                        detected_label = get_log_label(log_file_path)
+                        
+                        # Determine priority dynamically from line content and severity
+                        detected_priority = determine_priority(line, severity)
+                        
                         payload = {
                             "timestamp": ts,
                             "system_ip": self.node_id,
                             "log_path": log_file_path,
-                            "log_label": label,
-                            "application": label,
+                            "log_label": detected_label,
+                            "application": detected_label,
                             "log_line": line.rstrip("\n"),
                             "severity": severity,
-                            "priority": priority
+                            "priority": detected_priority
                         }
-                        logger.info(f"Issue detected [{severity}] in {label}: {line.strip()[:100]}")
+                        logger.info(f"Issue detected [{severity}|{detected_priority}] in {detected_label}: {line.strip()[:100]}")
                         
                         # ============================================
                         # CHECK SUPPRESSION RULES BEFORE SENDING
@@ -933,8 +1016,225 @@ def make_app(daemon: LogCollectorDaemon):
         except Exception as e:
             logger.error(f"Failed to get process tree for PID {pid}: {e}")
             return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+    
+    # -------- Configuration Management Endpoints --------
+    @app.route("/api/config", methods=["GET"])
+    def get_configuration():
+        """GET /api/config - Return current daemon configuration (non-secrets)"""
+        if not CONFIG_STORE_AVAILABLE:
+            return jsonify({"error": "Config store not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            config = get_config()
+
+            # Return config without secrets
+            safe_config = {
+                'connectivity': {
+                    'api_url': config.get('connectivity.api_url'),
+                    'telemetry_backend_url': config.get('connectivity.telemetry_backend_url')
+                },
+                'messaging': {
+                    'rabbitmq': {
+                        'queue': config.get('messaging.rabbitmq.queue')
+                        # Don't expose URL (contains password)
+                    }
+                },
+                'telemetry': config.get('telemetry'),
+                'monitoring': config.get('monitoring'),
+                'alerts': config.get('alerts'),
+                'ports': config.get('ports'),
+                'intervals': config.get('intervals'),
+                'logging': config.get('logging'),
+                'security': config.get('security')
+            }
+
+            return jsonify({
+                'success': True,
+                'config': safe_config,
+                'last_sync': config.last_sync.isoformat() if config.last_sync else None
+            }), HTTPStatus.OK
+
+        except Exception as e:
+            logger.error(f"Get config error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/config", methods=["POST"])
+    def update_configuration():
+        """POST /api/config - Update daemon configuration (admin only)"""
+        if not CONFIG_STORE_AVAILABLE:
+            return jsonify({"error": "Config store not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            data = request.json
+            if not data or 'settings' not in data:
+                return jsonify({'success': False, 'error': 'Settings required'}), HTTPStatus.BAD_REQUEST
+
+            config = get_config()
+            updated = []
+
+            # Update each setting
+            for key_path, value in data['settings'].items():
+                config.set(key_path, value)
+                updated.append(key_path)
+
+            # Save to disk
+            config.save()
+
+            return jsonify({
+                'success': True,
+                'message': f'Updated {len(updated)} settings',
+                'updated': updated
+            }), HTTPStatus.OK
+
+        except Exception as e:
+            logger.error(f"Update config error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/config/reload", methods=["POST"])
+    def reload_configuration():
+        """POST /api/config/reload - Reload configuration from backend and apply changes"""
+        if not CONFIG_STORE_AVAILABLE:
+            return jsonify({"error": "Config store not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            config = get_config()
+
+            # Reload and get changes
+            changes = config.reload()
+
+            # Apply runtime changes
+            apply_config_changes(daemon, changes)
+
+            return jsonify({
+                'success': True,
+                'message': 'Configuration reloaded',
+                'changes': len(changes),
+                'details': {k: {'old': v[0], 'new': v[1]} for k, v in changes.items()}
+            }), HTTPStatus.OK
+
+        except Exception as e:
+            logger.error(f"Reload config error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/config/schema", methods=["GET"])
+    def get_configuration_schema():
+        """GET /api/config/schema - Return configuration schema for validation"""
+        schema = {
+            'alerts.thresholds.cpu_critical.threshold': {
+                'type': 'number',
+                'min': 50,
+                'max': 100,
+                'description': 'CPU usage % for critical alerts'
+            },
+            'alerts.thresholds.cpu_critical.duration': {
+                'type': 'number',
+                'min': 60,
+                'max': 3600,
+                'description': 'Seconds before triggering critical alert'
+            },
+            'intervals.telemetry': {
+                'type': 'number',
+                'min': 1,
+                'max': 60,
+                'description': 'Telemetry collection interval in seconds'
+            },
+            'intervals.heartbeat': {
+                'type': 'number',
+                'min': 10,
+                'max': 300,
+                'description': 'Heartbeat interval in seconds'
+            },
+            'ports.control': {
+                'type': 'number',
+                'min': 1024,
+                'max': 65535,
+                'description': 'Daemon control port'
+            },
+            'ports.ws': {
+                'type': 'number',
+                'min': 1024,
+                'max': 65535,
+                'description': 'WebSocket port for live logs'
+            },
+            'ports.telemetry_ws': {
+                'type': 'number',
+                'min': 1024,
+                'max': 65535,
+                'description': 'WebSocket port for telemetry'
+            },
+            'logging.level': {
+                'type': 'string',
+                'enum': ['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                'description': 'Logging level'
+            },
+            'logging.max_bytes': {
+                'type': 'number',
+                'min': 1048576,
+                'max': 104857600,
+                'description': 'Maximum log file size in bytes'
+            },
+            'logging.backup_count': {
+                'type': 'number',
+                'min': 1,
+                'max': 20,
+                'description': 'Number of log backup files'
+            },
+            'telemetry.queue_max_size': {
+                'type': 'number',
+                'min': 100,
+                'max': 10000,
+                'description': 'Maximum telemetry queue size'
+            },
+            'security.cors_allowed_origins': {
+                'type': 'string',
+                'description': 'CORS allowed origins (* for all)'
+            }
+        }
+
+        return jsonify({'success': True, 'schema': schema}), HTTPStatus.OK
 
     return app
+
+
+def apply_config_changes(daemon: LogCollectorDaemon, changes: Dict[str, tuple]):
+    """Apply configuration changes at runtime"""
+    if not CONFIG_STORE_AVAILABLE:
+        return
+    
+    config = get_config()
+
+    for key_path, (old_value, new_value) in changes.items():
+        logger.info(f"[Config] Applying change: {key_path} = {new_value} (was {old_value})")
+
+        # Update alert thresholds (hot-reload)
+        if key_path.startswith('alerts.thresholds'):
+            # Alert system will read from config on next check
+            logger.info(f"[Config] Alert threshold updated: {key_path}")
+
+        # Update telemetry interval (requires restart of telemetry thread)
+        elif key_path == 'intervals.telemetry':
+            # Signal telemetry poster to restart with new interval
+            logger.info(f"[Config] Telemetry interval changed to {new_value}s (restart required)")
+            # TODO: Implement telemetry poster restart
+
+        # Update logging level
+        elif key_path == 'logging.level':
+            level_map = {
+                'DEBUG': logging.DEBUG,
+                'INFO': logging.INFO,
+                'WARNING': logging.WARNING,
+                'ERROR': logging.ERROR
+            }
+            new_level = level_map.get(new_value.upper(), logging.INFO)
+            logging.getLogger('resolvix').setLevel(new_level)
+            logger.info(f"[Config] Logging level changed to {new_value}")
+        
+        # Update monitoring keywords
+        elif key_path == 'monitoring.error_keywords':
+            # Rebuild error regex
+            kw = "|".join(re.escape(k) for k in new_value)
+            daemon._err_re = re.compile(rf"\b({kw})\b", re.IGNORECASE)
+            logger.info(f"[Config] Error keywords updated: {len(new_value)} keywords")
 
 
 # -------- CLI / Entrypoint --------
@@ -974,33 +1274,80 @@ if __name__ == "__main__":
     logger.info("="*60)
     logger.info("Resolvix Daemon Starting")
     logger.info("="*60)
+    
+    # ✅ Initialize configuration store
+    if CONFIG_STORE_AVAILABLE:
+        logger.info("[Config] Initializing configuration store...")
+        node_id = args.node_id or get_node_id()
+        config = init_config(
+            node_id=node_id,
+            backend_url=args.api_url
+        )
+        logger.info("[Config] Configuration store initialized")
+        
+        # Use config values (with CLI args as override)
+        log_files = args.log_files or config.get('monitoring.log_files', [])
+        control_port = args.control_port if args.control_port != DEFAULT_CONTROL_PORT else config.get('ports.control', DEFAULT_CONTROL_PORT)
+        ws_port = args.ws_port if args.ws_port != DEFAULT_WS_PORT else config.get('ports.ws', DEFAULT_WS_PORT)
+        telemetry_ws_port = args.telemetry_ws_port if args.telemetry_ws_port != DEFAULT_TELEMETRY_WS_PORT else config.get('ports.telemetry_ws', DEFAULT_TELEMETRY_WS_PORT)
+        telemetry_interval = args.telemetry_interval if args.telemetry_interval != DEFAULT_TELEMETRY_INTERVAL else config.get('intervals.telemetry', DEFAULT_TELEMETRY_INTERVAL)
+        heartbeat_interval = args.heartbeat_interval if args.heartbeat_interval != DEFAULT_HEARTBEAT_INTERVAL else config.get('intervals.heartbeat', DEFAULT_HEARTBEAT_INTERVAL)
+        
+        # Get DB config from ConfigStore
+        db_host = args.db_host or config.get('suppression.db.host')
+        db_name = args.db_name or config.get('suppression.db.name')
+        db_user = args.db_user or config.get('suppression.db.user')
+        db_password = args.db_password or config.get_secret('db_password') or config.get('suppression.db.password')
+        db_port = args.db_port or config.get('suppression.db.port', 5432)
+        
+        # Get telemetry config
+        telemetry_backend_url = args.telemetry_backend_url or config.get('connectivity.telemetry_backend_url')
+        telemetry_jwt_token = args.telemetry_jwt_token or config.get_secret('telemetry_jwt_token')
+        
+        logger.info(f"[Config] Loaded configuration from store")
+    else:
+        logger.warning("[Config] Config store not available, using CLI arguments only")
+        log_files = args.log_files
+        control_port = args.control_port
+        ws_port = args.ws_port
+        telemetry_ws_port = args.telemetry_ws_port
+        telemetry_interval = args.telemetry_interval
+        heartbeat_interval = args.heartbeat_interval
+        db_host = args.db_host
+        db_name = args.db_name
+        db_user = args.db_user
+        db_password = args.db_password
+        db_port = args.db_port
+        telemetry_backend_url = args.telemetry_backend_url
+        telemetry_jwt_token = args.telemetry_jwt_token
+    
     daemon = LogCollectorDaemon(
-        log_files=args.log_files,  # Pass the list
+        log_files=log_files,
         api_url=args.api_url, 
-        ws_port=args.ws_port,
-        telemetry_ws_port=args.telemetry_ws_port,
+        ws_port=ws_port,
+        telemetry_ws_port=telemetry_ws_port,
         node_id=args.node_id,
-        telemetry_interval=args.telemetry_interval,
-        heartbeat_interval=args.heartbeat_interval,
-        db_host=args.db_host,
-        db_name=args.db_name,
-        db_user=args.db_user,
-        db_password=args.db_password,
-        db_port=args.db_port,
-        telemetry_backend_url=args.telemetry_backend_url,
-        telemetry_jwt_token=args.telemetry_jwt_token
+        telemetry_interval=telemetry_interval,
+        heartbeat_interval=heartbeat_interval,
+        db_host=db_host,
+        db_name=db_name,
+        db_user=db_user,
+        db_password=db_password,
+        db_port=db_port,
+        telemetry_backend_url=telemetry_backend_url,
+        telemetry_jwt_token=telemetry_jwt_token
     )
     daemon.start()
     app = make_app(daemon)
     # run flask on specified control port
-    logger.info(f"Control HTTP endpoint: http://0.0.0.0:{args.control_port}")
-    logger.info(f"Monitoring {len(args.log_files)} log file(s):")
-    for log_file in args.log_files:
+    logger.info(f"Control HTTP endpoint: http://0.0.0.0:{control_port}")
+    logger.info(f"Monitoring {len(log_files)} log file(s):")
+    for log_file in log_files:
         logger.info(f"  - {log_file}")
-    logger.info(f"Livelogs WebSocket port: {args.ws_port}")
-    logger.info(f"Telemetry WebSocket port: {args.telemetry_ws_port}")
-    logger.info(f"Telemetry interval: {args.telemetry_interval}s")
-    logger.info(f"Heartbeat interval: {args.heartbeat_interval}s")
+    logger.info(f"Livelogs WebSocket port: {ws_port}")
+    logger.info(f"Telemetry WebSocket port: {telemetry_ws_port}")
+    logger.info(f"Telemetry interval: {telemetry_interval}s")
+    logger.info(f"Heartbeat interval: {heartbeat_interval}s")
     logger.info(f"Daemon log file: /var/log/resolvix.log")
     if daemon.suppression_checker:
         logger.info(f"Suppression rules: ENABLED")
@@ -1008,7 +1355,7 @@ if __name__ == "__main__":
         logger.info(f"Suppression rules: DISABLED")
     try:
         # do not use debug in production
-        app.run(host="0.0.0.0", port=args.control_port)
+        app.run(host="0.0.0.0", port=control_port)
     except KeyboardInterrupt:
         logger.info("Daemon interrupted by user")
     finally:

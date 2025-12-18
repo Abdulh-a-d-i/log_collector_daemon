@@ -240,6 +240,58 @@ EOF
 
 
 
+# ============================================
+# Create Configuration Files
+# ============================================
+
+echo "[Installer] 📝 Creating configuration files..."
+
+# Create config directory
+sudo mkdir -p /etc/resolvix
+sudo chmod 755 /etc/resolvix
+
+# Create default config.json
+sudo tee /etc/resolvix/config.json > /dev/null <<CONFIG_EOF
+{
+  "connectivity": {
+    "api_url": "${API_URL}",
+    "telemetry_backend_url": "${TELEMETRY_BACKEND_URL}"
+  },
+  "monitoring": {
+    "log_files": ["${LOG_FILE}"]
+  },
+  "ports": {
+    "control": 8754,
+    "ws": 8755,
+    "telemetry_ws": 8756
+  },
+  "intervals": {
+    "telemetry": 3,
+    "heartbeat": 30
+  }
+}
+CONFIG_EOF
+
+sudo chmod 644 /etc/resolvix/config.json
+echo "[Installer] ✅ Created /etc/resolvix/config.json"
+
+# Create secrets.json (if passwords provided)
+if [ -n "$AUTH_TOKEN" ] || [ -n "$DB_PASSWORD" ]; then
+  sudo tee /etc/resolvix/secrets.json > /dev/null <<SECRETS_EOF
+{
+  "auth_token": "${AUTH_TOKEN:-}",
+  "db_password": "${DB_PASSWORD:-}",
+  "telemetry_jwt_token": ""
+}
+SECRETS_EOF
+
+  sudo chmod 600 /etc/resolvix/secrets.json
+  sudo chown $(whoami):$(whoami) /etc/resolvix/secrets.json
+  echo "[Installer] ✅ Created /etc/resolvix/secrets.json (restricted permissions)"
+else
+  echo "[Installer] ⚠️  No secrets to store, skipping secrets.json"
+fi
+
 # confirm existence or continue (daemon waits if missing)
 if [ ! -f "$LOG_FILE" ]; then
   echo "[Warning] Log file not found at $LOG_FILE. The daemon will wait until the file exists."
