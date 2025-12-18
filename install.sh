@@ -73,9 +73,60 @@ setup_ssh_access() {
 create_file_browser_user
 setup_ssh_access
 
-# packages for Debian/Ubuntu
-sudo apt update -y
-sudo apt install -y python3 python3-venv python3-pip
+# ============================================
+# APT Lock Handling Function
+# ============================================
+
+wait_for_apt_lock() {
+    echo "[Installer] 🔒 Checking for apt locks..."
+    
+    local max_attempts=30
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        if sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+           sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+           sudo fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then
+            
+            attempt=$((attempt + 1))
+            echo "[Installer] ⏳ apt is locked (attempt $attempt/$max_attempts). Waiting 10 seconds..."
+            
+            # Show which process is holding the lock
+            if pgrep -a "apt|dpkg|packagekit" > /dev/null; then
+                echo "[Installer] 📦 Processes using apt:"
+                pgrep -a "apt|dpkg|packagekit" || true
+            fi
+            
+            sleep 10
+        else
+            echo "[Installer] ✅ apt lock is free"
+            return 0
+        fi
+    done
+    
+    echo "[Installer] ⚠️  apt still locked after $max_attempts attempts"
+    echo "[Installer] 🛠️  Attempting to kill packagekitd..."
+    sudo killall packagekitd 2>/dev/null || true
+    sleep 5
+    
+    return 0
+}
+
+# ============================================
+# Install Packages with Lock Handling
+# ============================================
+
+install_packages() {
+    wait_for_apt_lock
+    
+    echo "[Installer] 📦 Updating package lists..."
+    sudo apt update -y
+    
+    echo "[Installer] 📦 Installing required packages..."
+    sudo apt install -y python3 python3-venv python3-pip
+}
+
+install_packages
 
 # create venv
 if [ ! -d "venv" ]; then
