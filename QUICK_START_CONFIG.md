@@ -46,6 +46,7 @@ curl -X POST http://localhost:8754/api/config/reload | jq
 ### New Message Fields
 
 Every error log now includes:
+
 - **`log_label`**: Auto-detected category (`apache_errors`, `mysql_errors`, `system`, etc.)
 - **`priority`**: Dynamic priority (`critical`, `high`, `medium`, `low`)
 
@@ -57,12 +58,12 @@ Every error log now includes:
 
 ### API Endpoints
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/config` | GET | Get current configuration |
-| `/api/config` | POST | Update settings |
-| `/api/config/reload` | POST | Reload from backend |
-| `/api/config/schema` | GET | Get validation schema |
+| Endpoint             | Method | Purpose                   |
+| -------------------- | ------ | ------------------------- |
+| `/api/config`        | GET    | Get current configuration |
+| `/api/config`        | POST   | Update settings           |
+| `/api/config/reload` | POST   | Reload from backend       |
+| `/api/config/schema` | GET    | Get validation schema     |
 
 ---
 
@@ -71,6 +72,7 @@ Every error log now includes:
 ### Change Telemetry Interval
 
 **Option 1: Via API**
+
 ```bash
 curl -X POST http://localhost:8754/api/config \
   -H "Content-Type: application/json" \
@@ -78,6 +80,7 @@ curl -X POST http://localhost:8754/api/config \
 ```
 
 **Option 2: Edit config file**
+
 ```bash
 sudo nano /etc/resolvix/config.json
 # Change "telemetry": 3 to "telemetry": 10
@@ -145,6 +148,7 @@ EOF
 ```
 
 Expected output:
+
 ```
 /var/log/apache2/error.log              -> apache_errors
 /var/log/nginx/error.log                -> nginx_errors
@@ -173,6 +177,7 @@ EOF
 ```
 
 Expected output:
+
 ```
 critical   | FATAL: System crash
 high       | ERROR: Connection failed
@@ -243,9 +248,7 @@ EOF
       "/var/log/apache2/error.log",
       "/var/log/mysql/error.log"
     ],
-    "error_keywords": [
-      "error", "fail", "critical", "fatal", "panic"
-    ]
+    "error_keywords": ["error", "fail", "critical", "fatal", "panic"]
   },
   "alerts": {
     "thresholds": {
@@ -289,6 +292,7 @@ EOF
 ```
 
 **Important:** Set permissions to 600:
+
 ```bash
 sudo chmod 600 /etc/resolvix/secrets.json
 ```
@@ -354,11 +358,11 @@ curl -X POST http://localhost:8754/api/config/reload
   "timestamp": "2025-12-18T10:30:45Z",
   "system_ip": "192.168.1.100",
   "log_path": "/var/log/nginx/error.log",
-  "log_label": "nginx_errors",      // ✅ Auto-detected
+  "log_label": "nginx_errors", // ✅ Auto-detected
   "application": "nginx_errors",
   "log_line": "2025/12/18 10:30:45 [error] connection refused",
   "severity": "error",
-  "priority": "high"                 // ✅ Dynamic based on keywords
+  "priority": "high" // ✅ Dynamic based on keywords
 }
 ```
 
@@ -370,31 +374,34 @@ curl -X POST http://localhost:8754/api/config/reload
 
 ```javascript
 // Fetch config
-const response = await fetch('http://daemon-ip:8754/api/config');
+const response = await fetch("http://daemon-ip:8754/api/config");
 const data = await response.json();
 
-console.log('Telemetry interval:', data.config.intervals.telemetry);
-console.log('CPU threshold:', data.config.alerts.thresholds.cpu_critical.threshold);
+console.log("Telemetry interval:", data.config.intervals.telemetry);
+console.log(
+  "CPU threshold:",
+  data.config.alerts.thresholds.cpu_critical.threshold
+);
 ```
 
 ### Update Settings from UI
 
 ```javascript
 // Update settings
-await fetch('http://daemon-ip:8754/api/config', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+await fetch("http://daemon-ip:8754/api/config", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     settings: {
-      'intervals.telemetry': 10,
-      'alerts.thresholds.cpu_critical.threshold': 85
-    }
-  })
+      "intervals.telemetry": 10,
+      "alerts.thresholds.cpu_critical.threshold": 85,
+    },
+  }),
 });
 
 // Reload to apply
-await fetch('http://daemon-ip:8754/api/config/reload', {
-  method: 'POST'
+await fetch("http://daemon-ip:8754/api/config/reload", {
+  method: "POST",
 });
 ```
 
@@ -402,8 +409,9 @@ await fetch('http://daemon-ip:8754/api/config/reload', {
 
 ```javascript
 // Get schema for validation
-const schema = await fetch('http://daemon-ip:8754/api/config/schema')
-  .then(r => r.json());
+const schema = await fetch("http://daemon-ip:8754/api/config/schema").then(
+  (r) => r.json()
+);
 
 // Use schema to build form with validation
 Object.entries(schema.schema).forEach(([key, def]) => {
@@ -426,6 +434,7 @@ Object.entries(schema.schema).forEach(([key, def]) => {
 ## 🔐 Security Best Practices
 
 1. **Protect Secrets File**:
+
    ```bash
    sudo chmod 600 /etc/resolvix/secrets.json
    sudo chown resolvix:resolvix /etc/resolvix/secrets.json

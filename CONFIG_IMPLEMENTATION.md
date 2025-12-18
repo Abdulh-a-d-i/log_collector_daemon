@@ -11,6 +11,7 @@ All features from the implementation plan have been successfully integrated into
 ### 1. **Config Store Module** (`config_store.py`)
 
 A complete configuration management system with:
+
 - ✅ Backend synchronization (fetches config from `/api/settings/daemon/:nodeId`)
 - ✅ Local persistence (`/etc/resolvix/config.json`)
 - ✅ Secrets management (`/etc/resolvix/secrets.json` with 600 permissions)
@@ -23,16 +24,18 @@ A complete configuration management system with:
 Added two new functions to `log_collector_daemon.py`:
 
 **`get_log_label(log_path: str)`**
+
 - Automatically detects log type from file path
 - Examples:
   - `/var/log/apache2/error.log` → `apache_errors`
-  - `/var/log/nginx/error.log` → `nginx_errors`  
+  - `/var/log/nginx/error.log` → `nginx_errors`
   - `/var/log/mysql/error.log` → `mysql_errors`
   - `/var/log/syslog` → `system`
   - `/var/log/kern.log` → `kernel`
   - `/var/log/auth.log` → `authentication`
 
 **`determine_priority(log_line: str, severity: str)`**
+
 - Returns: `'critical'`, `'high'`, `'medium'`, or `'low'`
 - Critical keywords: `fatal`, `panic`, `kernel panic`, `out of memory`, `segmentation fault`
 - High keywords: `error`, `failed`, `exception`, `denied`, `timeout`
@@ -41,16 +44,17 @@ Added two new functions to `log_collector_daemon.py`:
 ### 3. **Updated RabbitMQ Messages**
 
 All log entries now include:
+
 ```json
 {
   "timestamp": "2025-12-18T10:30:45Z",
   "system_ip": "192.168.1.100",
   "log_path": "/var/log/nginx/error.log",
-  "log_label": "nginx_errors",     // ✅ NEW
+  "log_label": "nginx_errors", // ✅ NEW
   "application": "nginx_errors",
   "log_line": "connection refused...",
   "severity": "error",
-  "priority": "high"                // ✅ NEW (dynamic)
+  "priority": "high" // ✅ NEW (dynamic)
 }
 ```
 
@@ -59,12 +63,15 @@ All log entries now include:
 Four new REST endpoints added to the daemon:
 
 #### `GET /api/config`
+
 Returns current configuration (excluding secrets)
+
 ```bash
 curl http://localhost:8754/api/config
 ```
 
 Response:
+
 ```json
 {
   "success": true,
@@ -80,7 +87,9 @@ Response:
 ```
 
 #### `POST /api/config`
+
 Update configuration settings
+
 ```bash
 curl -X POST http://localhost:8754/api/config \
   -H "Content-Type: application/json" \
@@ -93,26 +102,31 @@ curl -X POST http://localhost:8754/api/config \
 ```
 
 #### `POST /api/config/reload`
+
 Reload configuration from backend and apply changes
+
 ```bash
 curl -X POST http://localhost:8754/api/config/reload
 ```
 
 Response shows detected changes:
+
 ```json
 {
   "success": true,
   "message": "Configuration reloaded",
   "changes": 2,
   "details": {
-    "intervals.telemetry": {"old": 3, "new": 5},
-    "logging.level": {"old": "INFO", "new": "DEBUG"}
+    "intervals.telemetry": { "old": 3, "new": 5 },
+    "logging.level": { "old": "INFO", "new": "DEBUG" }
   }
 }
 ```
 
 #### `GET /api/config/schema`
+
 Returns validation schema for all configurable settings
+
 ```bash
 curl http://localhost:8754/api/config/schema
 ```
@@ -120,12 +134,14 @@ curl http://localhost:8754/api/config/schema
 ### 5. **Config-Driven Daemon Startup**
 
 The daemon now:
+
 1. Initializes ConfigStore on startup
 2. Syncs with backend (or loads from cache if offline)
 3. Uses config values with CLI args as override
 4. Supports hot-reload of most settings without restart
 
 Priority order:
+
 1. **CLI arguments** (highest priority)
 2. **Local config file** (`/etc/resolvix/config.json`)
 3. **Backend config** (synced from API)
@@ -134,6 +150,7 @@ Priority order:
 ### 6. **Test Suite** (`test_config.py`)
 
 Comprehensive test script covering:
+
 - ✅ ConfigStore initialization
 - ✅ Get/set configuration values
 - ✅ Save/reload operations
@@ -143,6 +160,7 @@ Comprehensive test script covering:
 - ✅ Error handling
 
 Run tests:
+
 ```bash
 python3 test_config.py
 ```
@@ -150,6 +168,7 @@ python3 test_config.py
 ### 7. **Updated Installer** (`install.sh`)
 
 Now creates configuration files during installation:
+
 - Creates `/etc/resolvix/config.json` with initial settings
 - Creates `/etc/resolvix/secrets.json` (600 permissions) if secrets provided
 - Sets proper file ownership and permissions
@@ -161,6 +180,7 @@ Now creates configuration files during installation:
 ### Running the Daemon
 
 **With ConfigStore (recommended):**
+
 ```bash
 sudo python3 log_collector_daemon.py \
   --log-file /var/log/syslog \
@@ -169,6 +189,7 @@ sudo python3 log_collector_daemon.py \
 ```
 
 The daemon will:
+
 1. Load config from `/etc/resolvix/config.json`
 2. Sync with backend at `http://localhost:3000/api/settings/daemon/server-01`
 3. Cache config to `/etc/resolvix/config_cache.json`
@@ -179,6 +200,7 @@ If `config_store.py` is not available, daemon runs using CLI args only.
 ### Updating Configuration
 
 **From backend:**
+
 ```bash
 # Update settings in backend database
 # Daemon auto-syncs every hour, or trigger manually:
@@ -186,6 +208,7 @@ curl -X POST http://localhost:8754/api/config/reload
 ```
 
 **Directly via API:**
+
 ```bash
 curl -X POST http://localhost:8754/api/config \
   -H "Content-Type: application/json" \
@@ -199,6 +222,7 @@ curl -X POST http://localhost:8754/api/config \
 ```
 
 **Manually edit local file:**
+
 ```bash
 sudo nano /etc/resolvix/config.json
 # Then reload:
@@ -259,26 +283,28 @@ log_collector_daemon/
 
 These settings can be changed without restarting the daemon:
 
-| Setting | Hot-Reload | Notes |
-|---------|-----------|-------|
-| `alerts.thresholds.*` | ✅ Yes | Alert system reads on next check |
-| `monitoring.error_keywords` | ✅ Yes | Regex rebuilt immediately |
-| `logging.level` | ✅ Yes | Logger level updated |
-| `intervals.telemetry` | ⚠️ Partial | Requires telemetry restart |
-| `intervals.heartbeat` | ⚠️ Partial | Requires heartbeat restart |
-| `ports.*` | ❌ No | Requires daemon restart |
-| `messaging.rabbitmq.*` | ❌ No | Requires daemon restart |
+| Setting                     | Hot-Reload | Notes                            |
+| --------------------------- | ---------- | -------------------------------- |
+| `alerts.thresholds.*`       | ✅ Yes     | Alert system reads on next check |
+| `monitoring.error_keywords` | ✅ Yes     | Regex rebuilt immediately        |
+| `logging.level`             | ✅ Yes     | Logger level updated             |
+| `intervals.telemetry`       | ⚠️ Partial | Requires telemetry restart       |
+| `intervals.heartbeat`       | ⚠️ Partial | Requires heartbeat restart       |
+| `ports.*`                   | ❌ No      | Requires daemon restart          |
+| `messaging.rabbitmq.*`      | ❌ No      | Requires daemon restart          |
 
 ---
 
 ## 🔒 Security
 
 **Secrets Management:**
+
 - Secrets stored in `/etc/resolvix/secrets.json` with 600 permissions
 - Never exposed via `/api/config` endpoint
 - Separate from main config for access control
 
 **API Security:**
+
 - All config endpoints require localhost or admin auth (implement as needed)
 - Schema validation prevents invalid values
 - Secrets not returned in GET requests
@@ -359,6 +385,7 @@ These settings can be changed without restarting the daemon:
 ## 🧪 Testing
 
 ### Run All Tests
+
 ```bash
 python3 test_config.py
 ```
@@ -366,6 +393,7 @@ python3 test_config.py
 ### Test Individual Components
 
 **ConfigStore:**
+
 ```bash
 python3 -c "
 from config_store import init_config
@@ -375,6 +403,7 @@ print(config.get('intervals.telemetry'))
 ```
 
 **API Endpoints:**
+
 ```bash
 # Health check
 curl http://localhost:8754/api/health
@@ -419,6 +448,7 @@ For full functionality, the backend must provide:
 ### API Endpoint: `GET /api/settings/daemon/:nodeId`
 
 **Expected Response:**
+
 ```json
 {
   "success": true,
@@ -442,6 +472,7 @@ For full functionality, the backend must provide:
 ### RabbitMQ Consumer Update
 
 The backend consumer must handle new fields:
+
 - `log_label` (string) - Log category
 - `priority` (string) - `critical`, `high`, `medium`, `low`
 
@@ -462,6 +493,7 @@ The backend consumer must handle new fields:
 ## 🐛 Troubleshooting
 
 **Config not loading:**
+
 ```bash
 # Check if config file exists
 ls -la /etc/resolvix/config.json
@@ -474,6 +506,7 @@ python3 -c "from config_store import init_config; config = init_config(); print(
 ```
 
 **Backend sync failing:**
+
 ```bash
 # Check backend endpoint
 curl http://localhost:3000/api/settings/daemon/test-node
@@ -483,6 +516,7 @@ cat /etc/resolvix/config_cache.json
 ```
 
 **API endpoints not working:**
+
 ```bash
 # Check daemon is running
 curl http://localhost:8754/api/health
