@@ -19,9 +19,11 @@ A comprehensive distributed log monitoring and telemetry collection system for L
 
 ### Error Log Monitoring
 
+- **Multi-file monitoring** ⭐ NEW - Monitor multiple log files simultaneously with one daemon
 - **Real-time log monitoring** - Continuously tails log files for error patterns
 - **Intelligent filtering** - Detects errors, warnings, critical issues, and failures
 - **Severity classification** - Automatically categorizes log entries (critical, failure, error, warn, info)
+- **File-specific labels** ⭐ NEW - Each monitored file gets automatic labeling
 - **Timestamp parsing** - Handles multiple log timestamp formats (syslog, ISO8601, RFC3339)
 - **Centralized reporting** - Sends filtered errors to central API endpoint
 - **Suppression rules** ⭐ NEW - Filter out known errors before ticket creation

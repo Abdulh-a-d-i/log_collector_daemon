@@ -261,13 +261,24 @@ def get_machine_uuid(api_url=None):
 
 # -------- Daemon class --------
 class LogCollectorDaemon:
-    def __init__(self, log_file, api_url, ws_port=DEFAULT_WS_PORT, 
+    def __init__(self, log_files, api_url, ws_port=DEFAULT_WS_PORT, 
                  telemetry_ws_port=DEFAULT_TELEMETRY_WS_PORT, node_id=None, 
                  interval=1, tail_lines=200, telemetry_interval=DEFAULT_TELEMETRY_INTERVAL,
                  heartbeat_interval=DEFAULT_HEARTBEAT_INTERVAL,
                  db_host=None, db_name=None, db_user=None, db_password=None, db_port=5432,
                  telemetry_backend_url=None, telemetry_jwt_token=None):
-        self.log_file = os.path.abspath(log_file)
+        # Store log files as list of dicts with metadata
+        self.log_files = []
+        for i, log_file in enumerate(log_files):
+            self.log_files.append({
+                'path': os.path.abspath(log_file),
+                'label': os.path.basename(log_file).replace('.log', '').replace('.', '_') or f'log_{i+1}',
+                'priority': 'high'
+            })
+        
+        # Keep backward compatibility - use first file for livelogs
+        self.log_file = self.log_files[0]['path'] if self.log_files else None
+        
         self.api_url = api_url.rstrip("/") if api_url else None
         self.ws_port = int(ws_port)
         self.telemetry_ws_port = int(telemetry_ws_port)
@@ -277,7 +288,7 @@ class LogCollectorDaemon:
         self.telemetry_interval = telemetry_interval
         self.heartbeat_interval = heartbeat_interval
         self._stop_flag = threading.Event()
-        self._thread = None
+        self._monitor_threads = []  # List of monitoring threads (one per file)
         self._heartbeat_thread = None
         self._live_proc = None  # subprocess for livelogs.py
         self._telemetry_proc = None  # subprocess for telemetry_ws.py
@@ -378,12 +389,23 @@ class LogCollectorDaemon:
                 logger.info("[Daemon] Telemetry disabled (no backend URL)")
 
     def start(self):
-        # starts background thread for monitoring
-        logger.info(f"Starting log monitoring for: {self.log_file}")
+        # starts background threads for monitoring
+        logger.info(f"Starting log monitoring for {len(self.log_files)} file(s)")
         logger.info(f"API URL: {self.api_url}")
         logger.info(f"Node ID: {self.node_id}")
-        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self._thread.start()
+        
+        # Start a monitoring thread for each log file
+        for log_file_config in self.log_files:
+            thread = threading.Thread(
+                target=self._monitor_loop,
+                args=(log_file_config,),
+                daemon=True,
+                name=f"Monitor-{log_file_config['label']}"
+            )
+            thread.start()
+            self._monitor_threads.append(thread)
+            logger.info(f"Started monitoring: {log_file_config['path']} [{log_file_config['label']}]")
+        
         # start heartbeat thread
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
@@ -401,10 +423,16 @@ class LogCollectorDaemon:
 
     def stop(self):
         self._stop_flag.set()
-        if self._thread:
-            self._thread.join(timeout=2)
+        
+        # Wait for all monitor threads
+        for thread in self._monitor_threads:
+            if thread:
+                thread.join(timeout=2)
+        
+        # Stop heartbeat
         if self._heartbeat_thread:
             self._heartbeat_thread.join(timeout=2)
+        
         # ensure live proc stopped
         self.stop_livelogs()
         self.stop_telemetry()
@@ -509,38 +537,53 @@ class LogCollectorDaemon:
             # Wait for next heartbeat
             self._stop_flag.wait(timeout=self.heartbeat_interval)
     
-    def _monitor_loop(self):
-        # main loop: tail log file continuously and send matches via HTTP POST
+    def _monitor_loop(self, log_file_config):
+        """
+        Monitor a single log file.
+        This runs in its own thread.
+        
+        Args:
+            log_file_config: Dict with 'path', 'label', 'priority'
+        """
+        log_file_path = log_file_config['path']
+        label = log_file_config['label']
+        priority = log_file_config['priority']
+        
         # Wait until file exists; do not crash if missing.
-        while not os.path.exists(self.log_file) and not self._stop_flag.is_set():
-            logger.warning(f"Waiting for log file: {self.log_file}")
-            time.sleep(1)
+        while not os.path.exists(log_file_path) and not self._stop_flag.is_set():
+            logger.warning(f"Waiting for log file: {log_file_path}")
+            time.sleep(5)
+        
         if self._stop_flag.is_set():
             return
 
-        logger.info(f"Log file found, starting monitoring: {self.log_file}")
+        logger.info(f"Log file found, starting monitoring: {log_file_path}")
         try:
-            with open(self.log_file, "r", errors="ignore") as f:
+            with open(log_file_path, "r", errors="ignore") as f:
                 # go to EOF
                 f.seek(0, os.SEEK_END)
-                logger.info("Monitoring started, waiting for critical log entries...")
+                logger.info(f"Monitoring started [{label}]: {log_file_path}")
+                
                 while not self._stop_flag.is_set():
                     line = f.readline()
                     if not line:
                         time.sleep(self.interval)
                         continue
+                    
                     if self._err_re.search(line):
                         severity = detect_severity(line)
                         ts = parse_timestamp(line)
                         payload = {
                             "timestamp": ts,
                             "system_ip": self.node_id,
-                            "log_path": self.log_file,
-                            "application": "system",
+                            "log_path": log_file_path,
+                            "log_label": label,
+                            "application": label,
                             "log_line": line.rstrip("\n"),
-                            "severity": severity
+                            "severity": severity,
+                            "priority": priority
                         }
-                        logger.info(f"Issue detected [{severity}]: {line.strip()[:100]}")
+                        logger.info(f"Issue detected [{severity}] in {label}: {line.strip()[:100]}")
                         
                         # ============================================
                         # CHECK SUPPRESSION RULES BEFORE SENDING
@@ -554,26 +597,26 @@ class LogCollectorDaemon:
                                 
                                 if should_suppress:
                                     logger.info(
-                                        f"[SUPPRESSED] Error suppressed by rule: {matched_rule['name']} (ID: {matched_rule['id']})"
+                                        f"[SUPPRESSED] [{label}] Error suppressed by rule: {matched_rule['name']} (ID: {matched_rule['id']})"
                                     )
-                                    logger.debug(f"[SUPPRESSED] Match text: {matched_rule['match_text']}")
-                                    logger.debug(f"[SUPPRESSED] Error line: {line.strip()[:200]}")
+                                    logger.debug(f"[SUPPRESSED] [{label}] Match text: {matched_rule['match_text']}")
+                                    logger.debug(f"[SUPPRESSED] [{label}] Error line: {line.strip()[:200]}")
                                     continue  # Skip sending to RabbitMQ
                             except Exception as e:
-                                logger.error(f"[SUPPRESSED] Error checking suppression rules: {e}")
+                                logger.error(f"[SUPPRESSED] [{label}] Error checking suppression rules: {e}")
                                 # On error, proceed with sending (fail-open behavior)
                         
                         # best-effort post; don't crash daemon if fails
                         if self.api_url:
                             success = send_to_rabbitmq(payload)
                             if success:
-                                logger.info(f"✅ Log entry sent to RabbitMQ successfully")
+                                logger.info(f"✅ [{label}] Log entry sent to RabbitMQ successfully")
                             else:
-                                logger.error(f"❌ Failed to send log to RabbitMQ")
+                                logger.error(f"❌ [{label}] Failed to send log to RabbitMQ")
                         else:
-                            logger.info(f"No API configured, logging locally: {json.dumps(payload)}")
+                            logger.info(f"[{label}] No API configured, logging locally: {json.dumps(payload)}")
         except Exception as e:
-            logger.error(f"Monitor loop exception: {e}", exc_info=True)
+            logger.error(f"Monitor loop exception for {log_file_path}: {e}", exc_info=True)
 
     # ---------------- subprocess control for livelogs ----------------
     def start_livelogs(self):
@@ -677,7 +720,18 @@ class LogCollectorDaemon:
         
         status = {
             "node_id": self.node_id,
-            "log_file": self.log_file,
+            "log_file": self.log_file,  # Keep for backward compatibility (first file)
+            "monitored_files": {
+                "count": len(self.log_files),
+                "files": [
+                    {
+                        "path": f["path"],
+                        "label": f["label"],
+                        "priority": f["priority"]
+                    }
+                    for f in self.log_files
+                ]
+            },
             "livelogs": {
                 "running": livelogs_running,
                 "pid": livelogs_pid,
@@ -886,7 +940,8 @@ def make_app(daemon: LogCollectorDaemon):
 # -------- CLI / Entrypoint --------
 def parse_args():
     parser = argparse.ArgumentParser(description="Log Collector Daemon (error monitoring + telemetry + control endpoint)")
-    parser.add_argument("--log-file", "-l", required=True, help="Path to log file to monitor")
+    parser.add_argument("--log-file", "-l", action='append', dest='log_files',
+                       help="Path to log file to monitor (can be specified multiple times)")
     parser.add_argument("--api-url", "-a", required=True, help="Central API URL to send logs")
     parser.add_argument("--control-port", "-p", type=int, default=DEFAULT_CONTROL_PORT, help="Port for control HTTP server")
     parser.add_argument("--ws-port", type=int, default=DEFAULT_WS_PORT, help="Port where livelogs will host websocket")
@@ -905,7 +960,14 @@ def parse_args():
     parser.add_argument("--db-user", help="Database user for suppression rules")
     parser.add_argument("--db-password", help="Database password for suppression rules")
     parser.add_argument("--db-port", type=int, default=5432, help="Database port (default: 5432)")
-    return parser.parse_args()
+    
+    args = parser.parse_args()
+    
+    # Validate at least one log file
+    if not args.log_files:
+        parser.error("At least one --log-file must be specified")
+    
+    return args
 
 if __name__ == "__main__":
     args = parse_args()
@@ -913,7 +975,7 @@ if __name__ == "__main__":
     logger.info("Resolvix Daemon Starting")
     logger.info("="*60)
     daemon = LogCollectorDaemon(
-        log_file=args.log_file, 
+        log_files=args.log_files,  # Pass the list
         api_url=args.api_url, 
         ws_port=args.ws_port,
         telemetry_ws_port=args.telemetry_ws_port,
@@ -932,11 +994,14 @@ if __name__ == "__main__":
     app = make_app(daemon)
     # run flask on specified control port
     logger.info(f"Control HTTP endpoint: http://0.0.0.0:{args.control_port}")
+    logger.info(f"Monitoring {len(args.log_files)} log file(s):")
+    for log_file in args.log_files:
+        logger.info(f"  - {log_file}")
     logger.info(f"Livelogs WebSocket port: {args.ws_port}")
     logger.info(f"Telemetry WebSocket port: {args.telemetry_ws_port}")
     logger.info(f"Telemetry interval: {args.telemetry_interval}s")
     logger.info(f"Heartbeat interval: {args.heartbeat_interval}s")
-    logger.info(f"Log file: /var/log/resolvix.log")
+    logger.info(f"Daemon log file: /var/log/resolvix.log")
     if daemon.suppression_checker:
         logger.info(f"Suppression rules: ENABLED")
     else:
