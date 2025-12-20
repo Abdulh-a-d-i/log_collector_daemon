@@ -695,6 +695,20 @@ class LogCollectorDaemon:
                         time.sleep(self.interval)
                         continue
                     
+                    # Skip daemon's own operational messages to prevent recursive detection
+                    if any(marker in line for marker in [
+                        'Issue detected',
+                        '[SUPPRESSED]',
+                        'Error checking suppression',
+                        'Backend error reporting',
+                        'Daemon initialization',
+                        'Configuration store',
+                        'Health check',
+                        'Component',
+                        'log_collector_daemon.py'
+                    ]):
+                        continue
+                    
                     if self._err_re.search(line):
                         severity = detect_severity(line)
                         ts = parse_timestamp(line)
@@ -715,7 +729,7 @@ class LogCollectorDaemon:
                             "severity": severity,
                             "priority": detected_priority
                         }
-                        logger.info(f"Issue detected [{severity}|{detected_priority}] in {detected_label}: {line.strip()[:100]}")
+                        logger.debug(f"Issue detected [{severity}|{detected_priority}] in {detected_label}: {line.strip()[:100]}")
                         
                         # ============================================
                         # CHECK SUPPRESSION RULES BEFORE SENDING
