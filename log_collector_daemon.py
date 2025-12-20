@@ -20,6 +20,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import pika
 import json
+from typing import Dict, Optional, List
 try:
     import psycopg2
     PSYCOPG2_AVAILABLE = True
