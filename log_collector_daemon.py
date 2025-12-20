@@ -61,6 +61,10 @@ except ImportError as e:
     CONFIG_STORE_AVAILABLE = False
     print(f"[WARNING] Config store not available: {e}")
 
+# Daemon version and startup tracking
+DAEMON_VERSION = "1.1.0"
+DAEMON_START_TIME = time.time()
+
 RABBITMQ_URL = "amqp://resolvix_user:resolvix4321@140.238.255.110:5672";
 QUEUE_NAME = "error_logs_queue";
 
@@ -90,6 +94,38 @@ def send_to_rabbitmq(payload):
     except Exception as e:
         logger.error(f"❌ Failed to send to RabbitMQ: {e}")
         return False
+
+class BackendLogHandler(logging.Handler):
+    """Custom log handler that sends ERROR and CRITICAL logs to backend"""
+    
+    def __init__(self, backend_url, node_id):
+        super().__init__()
+        self.backend_url = backend_url
+        self.node_id = node_id
+        self.setLevel(logging.ERROR)
+    
+    def emit(self, record):
+        try:
+            log_entry = self.format(record)
+            
+            # Send to backend via RabbitMQ (reuse existing mechanism)
+            payload = {
+                'node_id': self.node_id,
+                'source': 'resolvix_daemon',
+                'priority': 'critical' if record.levelno >= logging.CRITICAL else 'high',
+                'log_line': log_entry,
+                'timestamp': datetime.fromtimestamp(record.created).isoformat(),
+                'level': record.levelname
+            }
+            
+            # Use RabbitMQ for immediate delivery
+            send_to_rabbitmq(payload)
+            
+        except Exception:
+            # Don't crash daemon if backend is unreachable
+            # Silently fail - the error is already logged to file
+            pass
+
 # Setup logging
 LOG_FILE = "/var/log/resolvix.log"
 try:
@@ -352,6 +388,18 @@ class LogCollectorDaemon:
                 'label': os.path.basename(log_file).replace('.log', '').replace('.', '_') or f'log_{i+1}',
                 'priority': 'high'
             })
+        
+        # Add daemon's own log file to monitoring (self-monitoring)
+        daemon_log_path = os.path.abspath(LOG_FILE)
+        if not any(f['path'] == daemon_log_path for f in self.log_files):
+            self.log_files.append({
+                'path': daemon_log_path,
+                'label': 'resolvix_daemon',
+                'priority': 'critical',
+                'auto_monitor': True,  # Cannot be disabled
+                'description': 'Resolvix daemon internal logs'
+            })
+            logger.info(f"[Self-Monitoring] Added daemon log to monitoring: {daemon_log_path}")
         
         # Keep backward compatibility - use first file for livelogs
         self.log_file = self.log_files[0]['path'] if self.log_files else None
@@ -916,12 +964,60 @@ def make_app(daemon: LogCollectorDaemon):
         logger.warning(f"Unknown command: {cmd}")
         return jsonify({"status": "unknown_command"}), HTTPStatus.BAD_REQUEST
 
+    @app.route("/health", methods=["GET"])
+    def health_check():
+        """Enhanced health check endpoint with component status"""
+        uptime = time.time() - DAEMON_START_TIME
+        
+        # Check component health
+        components = {
+            'log_collector': 'running' if daemon._monitor_threads and any(t.is_alive() for t in daemon._monitor_threads) else 'stopped',
+            'livelogs_ws': 'running' if daemon._live_proc and daemon._live_proc.poll() is None else 'stopped',
+            'telemetry_ws': 'running' if daemon._telemetry_proc and daemon._telemetry_proc.poll() is None else 'stopped',
+            'control_api': 'running'  # If we're responding, API is running
+        }
+        
+        # Check optional components
+        if daemon.process_monitor:
+            components['process_monitor'] = 'running'
+        if daemon.suppression_checker:
+            components['suppression_checker'] = 'running'
+        
+        all_healthy = all(status == 'running' for status in components.values())
+        status_code = HTTPStatus.OK if all_healthy else HTTPStatus.SERVICE_UNAVAILABLE
+        
+        response = {
+            'status': 'healthy' if all_healthy else 'degraded',
+            'service': 'resolvix',
+            'version': DAEMON_VERSION,
+            'uptime_seconds': int(uptime),
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'node_id': daemon.node_id,
+            'ports': {
+                'control_api': daemon._control_port if hasattr(daemon, '_control_port') else DEFAULT_CONTROL_PORT,
+                'livelogs_ws': daemon.ws_port,
+                'telemetry_ws': daemon.telemetry_ws_port
+            },
+            'components': components,
+            'monitoring': {
+                'log_files': len(daemon.log_files),
+                'log_sources': [f['path'] for f in daemon.log_files]
+            }
+        }
+        
+        if not all_healthy:
+            response['errors'] = [
+                f'{name} is {status}' 
+                for name, status in components.items() 
+                if status != 'running'
+            ]
+        
+        return jsonify(response), status_code
+
     @app.route("/api/health", methods=["GET"])
-    def health():
-        return jsonify({
-            "status": "ok", 
-            "node_id": daemon.node_id
-        }), HTTPStatus.OK
+    def api_health():
+        """Legacy health endpoint - redirects to /health"""
+        return health_check()
     
     @app.route("/api/status", methods=["GET"])
     def status():
@@ -1270,95 +1366,143 @@ def parse_args():
     
     return args
 
+# ============================================================================
+# MAIN EXECUTION WITH STARTUP ERROR HANDLING
+# ============================================================================
 if __name__ == "__main__":
-    args = parse_args()
-    logger.info("="*60)
-    logger.info("Resolvix Daemon Starting")
-    logger.info("="*60)
-    
-    # ✅ Initialize configuration store
-    if CONFIG_STORE_AVAILABLE:
-        logger.info("[Config] Initializing configuration store...")
-        node_id = args.node_id or get_node_id()
-        config = init_config(
-            node_id=node_id,
-            backend_url=args.api_url
+    try:
+        args = parse_args()
+        logger.info("="*60)
+        logger.info(f"Resolvix Daemon Starting - Version {DAEMON_VERSION}")
+        logger.info("="*60)
+        
+        # ✅ Initialize configuration store
+        if CONFIG_STORE_AVAILABLE:
+            logger.info("[Config] Initializing configuration store...")
+            node_id = args.node_id or get_node_id()
+            config = init_config(
+                node_id=node_id,
+                backend_url=args.api_url
+            )
+            logger.info("[Config] Configuration store initialized")
+            
+            # Use config values (with CLI args as override)
+            log_files = args.log_files or config.get('monitoring.log_files', [])
+            control_port = args.control_port if args.control_port != DEFAULT_CONTROL_PORT else config.get('ports.control', DEFAULT_CONTROL_PORT)
+            ws_port = args.ws_port if args.ws_port != DEFAULT_WS_PORT else config.get('ports.ws', DEFAULT_WS_PORT)
+            telemetry_ws_port = args.telemetry_ws_port if args.telemetry_ws_port != DEFAULT_TELEMETRY_WS_PORT else config.get('ports.telemetry_ws', DEFAULT_TELEMETRY_WS_PORT)
+            telemetry_interval = args.telemetry_interval if args.telemetry_interval != DEFAULT_TELEMETRY_INTERVAL else config.get('intervals.telemetry', DEFAULT_TELEMETRY_INTERVAL)
+            heartbeat_interval = args.heartbeat_interval if args.heartbeat_interval != DEFAULT_HEARTBEAT_INTERVAL else config.get('intervals.heartbeat', DEFAULT_HEARTBEAT_INTERVAL)
+            
+            # Get DB config from ConfigStore
+            db_host = args.db_host or config.get('suppression.db.host')
+            db_name = args.db_name or config.get('suppression.db.name')
+            db_user = args.db_user or config.get('suppression.db.user')
+            db_password = args.db_password or config.get_secret('db_password') or config.get('suppression.db.password')
+            db_port = args.db_port or config.get('suppression.db.port', 5432)
+            
+            # Get telemetry config
+            telemetry_backend_url = args.telemetry_backend_url or config.get('connectivity.telemetry_backend_url')
+            telemetry_jwt_token = args.telemetry_jwt_token or config.get_secret('telemetry_jwt_token')
+            
+            logger.info(f"[Config] Loaded configuration from store")
+        else:
+            logger.warning("[Config] Config store not available, using CLI arguments only")
+            log_files = args.log_files
+            control_port = args.control_port
+            ws_port = args.ws_port
+            telemetry_ws_port = args.telemetry_ws_port
+            telemetry_interval = args.telemetry_interval
+            heartbeat_interval = args.heartbeat_interval
+            db_host = args.db_host
+            db_name = args.db_name
+            db_user = args.db_user
+            db_password = args.db_password
+            db_port = args.db_port
+            telemetry_backend_url = args.telemetry_backend_url
+            telemetry_jwt_token = args.telemetry_jwt_token
+        
+        # Initialize backend log handler for real-time error reporting
+        backend_log_handler = BackendLogHandler(
+            backend_url=args.api_url or telemetry_backend_url,
+            node_id=args.node_id or get_node_id()
         )
-        logger.info("[Config] Configuration store initialized")
+        logger.addHandler(backend_log_handler)
+        logger.info("[Config] Backend error reporting enabled")
         
-        # Use config values (with CLI args as override)
-        log_files = args.log_files or config.get('monitoring.log_files', [])
-        control_port = args.control_port if args.control_port != DEFAULT_CONTROL_PORT else config.get('ports.control', DEFAULT_CONTROL_PORT)
-        ws_port = args.ws_port if args.ws_port != DEFAULT_WS_PORT else config.get('ports.ws', DEFAULT_WS_PORT)
-        telemetry_ws_port = args.telemetry_ws_port if args.telemetry_ws_port != DEFAULT_TELEMETRY_WS_PORT else config.get('ports.telemetry_ws', DEFAULT_TELEMETRY_WS_PORT)
-        telemetry_interval = args.telemetry_interval if args.telemetry_interval != DEFAULT_TELEMETRY_INTERVAL else config.get('intervals.telemetry', DEFAULT_TELEMETRY_INTERVAL)
-        heartbeat_interval = args.heartbeat_interval if args.heartbeat_interval != DEFAULT_HEARTBEAT_INTERVAL else config.get('intervals.heartbeat', DEFAULT_HEARTBEAT_INTERVAL)
+        daemon = LogCollectorDaemon(
+            log_files=log_files,
+            api_url=args.api_url, 
+            ws_port=ws_port,
+            telemetry_ws_port=telemetry_ws_port,
+            node_id=args.node_id,
+            telemetry_interval=telemetry_interval,
+            heartbeat_interval=heartbeat_interval,
+            db_host=db_host,
+            db_name=db_name,
+            db_user=db_user,
+            db_password=db_password,
+            db_port=db_port,
+            telemetry_backend_url=telemetry_backend_url,
+            telemetry_jwt_token=telemetry_jwt_token
+        )
         
-        # Get DB config from ConfigStore
-        db_host = args.db_host or config.get('suppression.db.host')
-        db_name = args.db_name or config.get('suppression.db.name')
-        db_user = args.db_user or config.get('suppression.db.user')
-        db_password = args.db_password or config.get_secret('db_password') or config.get('suppression.db.password')
-        db_port = args.db_port or config.get('suppression.db.port', 5432)
+        # Store control port for health endpoint
+        daemon._control_port = control_port
         
-        # Get telemetry config
-        telemetry_backend_url = args.telemetry_backend_url or config.get('connectivity.telemetry_backend_url')
-        telemetry_jwt_token = args.telemetry_jwt_token or config.get_secret('telemetry_jwt_token')
+        daemon.start()
+        app = make_app(daemon)
+        # run flask on specified control port
+        logger.info(f"Control HTTP endpoint: http://0.0.0.0:{control_port}")
+        logger.info(f"Monitoring {len(log_files)} log file(s):")
+        for log_file in log_files:
+            logger.info(f"  - {log_file}")
+        logger.info(f"Livelogs WebSocket port: {ws_port}")
+        logger.info(f"Telemetry WebSocket port: {telemetry_ws_port}")
+        logger.info(f"Telemetry interval: {telemetry_interval}s")
+        logger.info(f"Heartbeat interval: {heartbeat_interval}s")
+        logger.info(f"Daemon log file: /var/log/resolvix.log")
+        if daemon.suppression_checker:
+            logger.info(f"Suppression rules: ENABLED")
+        else:
+            logger.info(f"Suppression rules: DISABLED")
         
-        logger.info(f"[Config] Loaded configuration from store")
-    else:
-        logger.warning("[Config] Config store not available, using CLI arguments only")
-        log_files = args.log_files
-        control_port = args.control_port
-        ws_port = args.ws_port
-        telemetry_ws_port = args.telemetry_ws_port
-        telemetry_interval = args.telemetry_interval
-        heartbeat_interval = args.heartbeat_interval
-        db_host = args.db_host
-        db_name = args.db_name
-        db_user = args.db_user
-        db_password = args.db_password
-        db_port = args.db_port
-        telemetry_backend_url = args.telemetry_backend_url
-        telemetry_jwt_token = args.telemetry_jwt_token
+        logger.info("="*60)
+        logger.info("✅ Daemon initialization complete")
+        logger.info("="*60)
+        
+    except Exception as e:
+        logger.critical("="*60)
+        logger.critical("❌ FATAL: Daemon failed to initialize")
+        logger.critical("="*60)
+        logger.critical(f"Error: {e}")
+        logger.critical(f"Type: {type(e).__name__}")
+        import traceback
+        logger.critical("Stack trace:")
+        for line in traceback.format_exc().split('\n'):
+            if line:
+                logger.critical(line)
+        logger.critical("="*60)
+        sys.exit(1)
     
-    daemon = LogCollectorDaemon(
-        log_files=log_files,
-        api_url=args.api_url, 
-        ws_port=ws_port,
-        telemetry_ws_port=telemetry_ws_port,
-        node_id=args.node_id,
-        telemetry_interval=telemetry_interval,
-        heartbeat_interval=heartbeat_interval,
-        db_host=db_host,
-        db_name=db_name,
-        db_user=db_user,
-        db_password=db_password,
-        db_port=db_port,
-        telemetry_backend_url=telemetry_backend_url,
-        telemetry_jwt_token=telemetry_jwt_token
-    )
-    daemon.start()
-    app = make_app(daemon)
-    # run flask on specified control port
-    logger.info(f"Control HTTP endpoint: http://0.0.0.0:{control_port}")
-    logger.info(f"Monitoring {len(log_files)} log file(s):")
-    for log_file in log_files:
-        logger.info(f"  - {log_file}")
-    logger.info(f"Livelogs WebSocket port: {ws_port}")
-    logger.info(f"Telemetry WebSocket port: {telemetry_ws_port}")
-    logger.info(f"Telemetry interval: {telemetry_interval}s")
-    logger.info(f"Heartbeat interval: {heartbeat_interval}s")
-    logger.info(f"Daemon log file: /var/log/resolvix.log")
-    if daemon.suppression_checker:
-        logger.info(f"Suppression rules: ENABLED")
-    else:
-        logger.info(f"Suppression rules: DISABLED")
+    # Run the daemon
     try:
         # do not use debug in production
         app.run(host="0.0.0.0", port=control_port)
     except KeyboardInterrupt:
         logger.info("Daemon interrupted by user")
+    except Exception as e:
+        logger.critical("="*60)
+        logger.critical("❌ FATAL: Daemon crashed during runtime")
+        logger.critical("="*60)
+        logger.critical(f"Error: {e}")
+        import traceback
+        logger.critical("Stack trace:")
+        for line in traceback.format_exc().split('\n'):
+            if line:
+                logger.critical(line)
+        logger.critical("="*60)
+        sys.exit(1)
     finally:
         logger.info("Shutting down daemon...")
         daemon.stop()
