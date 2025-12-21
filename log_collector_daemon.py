@@ -696,6 +696,7 @@ class LogCollectorDaemon:
                         continue
                     
                     # Skip daemon's own operational messages to prevent recursive detection
+                    # This prevents infinite log feedback loops
                     if any(marker in line for marker in [
                         'Issue detected',
                         '[SUPPRESSED]',
@@ -705,7 +706,21 @@ class LogCollectorDaemon:
                         'Configuration store',
                         'Health check',
                         'Component',
-                        'log_collector_daemon.py'
+                        'log_collector_daemon.py',
+                        '[AlertManager]',
+                        '[ProcessMonitor]',
+                        '[TelemetryQueue]',
+                        '[TelemetryPoster]',
+                        '[Config]',
+                        '[MachineUUID]',
+                        '[Self-Monitoring]',
+                        'Resolvix Daemon Starting',
+                        'Log entry sent to RabbitMQ',
+                        'sent to RabbitMQ',
+                        'Control command received',
+                        'Heartbeat',
+                        'Livelogs',
+                        'Telemetry'
                     ]):
                         continue
                     

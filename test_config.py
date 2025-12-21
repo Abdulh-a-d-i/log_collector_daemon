@@ -139,7 +139,7 @@ def test_daemon_api():
         response = requests.post(f'{BASE_URL}/config', json={
             'settings': {
                 'intervals.telemetry': 5,
-                'logging.level': 'DEBUG'
+                'logging.level': 'INFO'
             }
         }, timeout=5)
         data = response.json()
