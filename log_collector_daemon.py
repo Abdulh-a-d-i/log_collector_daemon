@@ -384,20 +384,28 @@ class LogCollectorDaemon:
         self.log_files = []
         for i, log_file in enumerate(log_files):
             self.log_files.append({
+                'id': f"file_{i+1:03d}",
                 'path': os.path.abspath(log_file),
                 'label': os.path.basename(log_file).replace('.log', '').replace('.', '_') or f'log_{i+1}',
-                'priority': 'high'
+                'priority': 'high',
+                'enabled': True,
+                'created_at': datetime.now().isoformat(),
+                'last_modified': datetime.now().isoformat()
             })
         
         # Add daemon's own log file to monitoring (self-monitoring)
         daemon_log_path = os.path.abspath(LOG_FILE)
         if not any(f['path'] == daemon_log_path for f in self.log_files):
             self.log_files.append({
+                'id': f"file_{len(self.log_files) + 1:03d}",
                 'path': daemon_log_path,
                 'label': 'resolvix_daemon',
                 'priority': 'critical',
+                'enabled': True,
                 'auto_monitor': True,  # Cannot be disabled
-                'description': 'Resolvix daemon internal logs'
+                'description': 'Resolvix daemon internal logs',
+                'created_at': datetime.now().isoformat(),
+                'last_modified': datetime.now().isoformat()
             })
             logger.info(f"[Self-Monitoring] Added daemon log to monitoring: {daemon_log_path}")
         
@@ -690,6 +698,10 @@ class LogCollectorDaemon:
                 logger.info(f"Monitoring started [{label}]: {log_file_path}")
                 
                 while not self._stop_flag.is_set():
+                    # Check if this file is still enabled
+                    if not log_file_config.get('enabled', True):
+                        time.sleep(5)  # Sleep longer when disabled
+                        continue
                     line = f.readline()
                     if not line:
                         time.sleep(self.interval)
@@ -1428,6 +1440,282 @@ def make_app(daemon: LogCollectorDaemon):
         }
 
         return jsonify({'success': True, 'schema': schema}), HTTPStatus.OK
+
+    # -------- Monitored Files Management Endpoints --------
+    @app.route("/api/monitored-files", methods=["GET"])
+    def get_monitored_files():
+        """GET /api/monitored-files - Get list of monitored log files"""
+        try:
+            files_with_metadata = []
+            for i, file_config in enumerate(daemon.log_files):
+                files_with_metadata.append({
+                    'id': file_config.get('id', f"file_{i+1:03d}"),
+                    'path': file_config['path'],
+                    'label': file_config.get('label', 'unknown'),
+                    'priority': file_config.get('priority', 'medium'),
+                    'enabled': file_config.get('enabled', True),
+                    'created_at': file_config.get('created_at', ''),
+                    'last_modified': file_config.get('last_modified', ''),
+                    'auto_monitor': file_config.get('auto_monitor', False)
+                })
+            
+            return jsonify({
+                'success': True,
+                'files': files_with_metadata,
+                'count': len(files_with_metadata)
+            }), HTTPStatus.OK
+            
+        except Exception as e:
+            logger.error(f"Get monitored files error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/monitored-files", methods=["POST"])
+    def add_monitored_files():
+        """POST /api/monitored-files - Add new files to monitoring"""
+        try:
+            data = request.get_json()
+            files_to_add = data.get('files', [])
+            
+            if not files_to_add:
+                return jsonify({
+                    'success': False,
+                    'error': 'No files provided'
+                }), HTTPStatus.BAD_REQUEST
+            
+            added = []
+            failed = []
+            
+            for file_data in files_to_add:
+                path = file_data.get('path')
+                
+                if not path:
+                    failed.append({
+                        'path': '',
+                        'error': 'Path is required'
+                    })
+                    continue
+                
+                # Validate file exists
+                if not os.path.exists(path):
+                    failed.append({
+                        'path': path,
+                        'error': 'File not found'
+                    })
+                    continue
+                
+                # Check if already monitored
+                abs_path = os.path.abspath(path)
+                if any(f['path'] == abs_path for f in daemon.log_files):
+                    failed.append({
+                        'path': path,
+                        'error': 'File already being monitored'
+                    })
+                    continue
+                
+                # Create file entry
+                file_id = f"file_{len(daemon.log_files) + 1:03d}"
+                new_file = {
+                    'id': file_id,
+                    'path': abs_path,
+                    'label': file_data.get('label', os.path.basename(path).replace('.log', '').replace('.', '_')),
+                    'priority': file_data.get('priority', 'medium'),
+                    'enabled': True,
+                    'created_at': datetime.now().isoformat(),
+                    'last_modified': datetime.now().isoformat()
+                }
+                
+                daemon.log_files.append(new_file)
+                added.append(new_file)
+                
+                # Start monitoring thread for this file
+                thread = threading.Thread(
+                    target=daemon._monitor_loop,
+                    args=(new_file,),
+                    daemon=True,
+                    name=f"Monitor-{new_file['label']}"
+                )
+                thread.start()
+                daemon._monitor_threads.append(thread)
+                logger.info(f"[MonitoredFiles] Started monitoring: {new_file['path']} [{new_file['label']}]")
+            
+            # Save configuration if config store available
+            if CONFIG_STORE_AVAILABLE:
+                try:
+                    config = get_config()
+                    config.set('monitoring.log_files', daemon.log_files)
+                    config.save()
+                except Exception as e:
+                    logger.warning(f"[MonitoredFiles] Failed to save to config: {e}")
+            
+            if failed and not added:
+                return jsonify({
+                    'success': False,
+                    'error': f'Failed to add all files',
+                    'failed_files': failed
+                }), HTTPStatus.BAD_REQUEST
+            
+            return jsonify({
+                'success': True,
+                'message': f'Added {len(added)} log file(s) to monitoring',
+                'added': added,
+                'failed_files': failed if failed else None,
+                'monitoring_reloaded': True
+            }), HTTPStatus.OK
+            
+        except Exception as e:
+            logger.error(f"Add monitored files error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/monitored-files/<file_id>", methods=["PUT"])
+    def update_monitored_file(file_id):
+        """PUT /api/monitored-files/:id - Update file configuration"""
+        try:
+            data = request.get_json()
+            
+            if not data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No updates provided'
+                }), HTTPStatus.BAD_REQUEST
+            
+            # Find file
+            file_index = None
+            for i, f in enumerate(daemon.log_files):
+                if f.get('id') == file_id or f.get('id', f"file_{i+1:03d}") == file_id:
+                    file_index = i
+                    break
+            
+            if file_index is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'File not found'
+                }), HTTPStatus.NOT_FOUND
+            
+            # Check if it's auto-monitored (cannot be disabled/modified)
+            if daemon.log_files[file_index].get('auto_monitor') and 'enabled' in data:
+                if not data['enabled']:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Cannot disable auto-monitored files'
+                    }), HTTPStatus.BAD_REQUEST
+            
+            # Update fields
+            if 'label' in data:
+                daemon.log_files[file_index]['label'] = data['label']
+            if 'priority' in data:
+                valid_priorities = ['critical', 'high', 'medium', 'low']
+                if data['priority'] not in valid_priorities:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Invalid priority. Must be one of: {", ".join(valid_priorities)}'
+                    }), HTTPStatus.BAD_REQUEST
+                daemon.log_files[file_index]['priority'] = data['priority']
+            if 'enabled' in data:
+                daemon.log_files[file_index]['enabled'] = data['enabled']
+            
+            daemon.log_files[file_index]['last_modified'] = datetime.now().isoformat()
+            
+            # Save configuration
+            if CONFIG_STORE_AVAILABLE:
+                try:
+                    config = get_config()
+                    config.set('monitoring.log_files', daemon.log_files)
+                    config.save()
+                except Exception as e:
+                    logger.warning(f"[MonitoredFiles] Failed to save to config: {e}")
+            
+            logger.info(f"[MonitoredFiles] Updated file {file_id}: {data}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'File configuration updated',
+                'file': daemon.log_files[file_index],
+                'monitoring_reloaded': True
+            }), HTTPStatus.OK
+            
+        except Exception as e:
+            logger.error(f"Update monitored file error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/monitored-files/<file_id>", methods=["DELETE"])
+    def delete_monitored_file(file_id):
+        """DELETE /api/monitored-files/:id - Delete monitored file"""
+        try:
+            # Find and remove file
+            deleted_file = None
+            file_index = None
+            
+            for i, f in enumerate(daemon.log_files):
+                if f.get('id') == file_id or f.get('id', f"file_{i+1:03d}") == file_id:
+                    # Check if it's auto-monitored (cannot be deleted)
+                    if f.get('auto_monitor'):
+                        return jsonify({
+                            'success': False,
+                            'error': 'Cannot delete auto-monitored files'
+                        }), HTTPStatus.BAD_REQUEST
+                    
+                    deleted_file = f
+                    file_index = i
+                    break
+            
+            if deleted_file is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'File not found'
+                }), HTTPStatus.NOT_FOUND
+            
+            # Remove from list
+            daemon.log_files.pop(file_index)
+            
+            # Note: We don't stop the monitoring thread as it's daemon thread
+            # It will detect the file is no longer in the list and stop naturally
+            # Or we can implement thread stopping if needed
+            
+            # Save configuration
+            if CONFIG_STORE_AVAILABLE:
+                try:
+                    config = get_config()
+                    config.set('monitoring.log_files', daemon.log_files)
+                    config.save()
+                except Exception as e:
+                    logger.warning(f"[MonitoredFiles] Failed to save to config: {e}")
+            
+            logger.info(f"[MonitoredFiles] Deleted file {file_id}: {deleted_file['path']}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'File removed from monitoring',
+                'deleted_file': deleted_file,
+                'monitoring_reloaded': True
+            }), HTTPStatus.OK
+            
+        except Exception as e:
+            logger.error(f"Delete monitored file error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/api/monitored-files/reload", methods=["POST"])
+    def reload_monitoring():
+        """POST /api/monitored-files/reload - Force reload monitoring configuration"""
+        try:
+            # Count active monitoring threads
+            active_threads = sum(1 for t in daemon._monitor_threads if t.is_alive())
+            
+            # Get count of enabled files
+            active_files = sum(1 for f in daemon.log_files if f.get('enabled', True))
+            
+            logger.info(f"[MonitoredFiles] Monitoring reload requested. Active files: {active_files}, Threads: {active_threads}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Monitoring configuration reloaded',
+                'active_files': active_files,
+                'threads_running': active_threads,
+                'timestamp': datetime.now().isoformat()
+            }), HTTPStatus.OK
+            
+        except Exception as e:
+            logger.error(f"Reload monitoring error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
 
     return app
 
