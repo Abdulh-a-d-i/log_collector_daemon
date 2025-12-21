@@ -1144,6 +1144,116 @@ def make_app(daemon: LogCollectorDaemon):
             return jsonify({"error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
     
     # -------- Configuration Management Endpoints --------
+    # Simplified endpoints for frontend (matches documentation)
+    @app.route("/config/get", methods=["GET"])
+    def get_config_simplified():
+        """GET /config/get - Simplified config endpoint for frontend"""
+        if not CONFIG_STORE_AVAILABLE:
+            return jsonify({"status": "error", "error": "Config store not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            config = get_config()
+            
+            # Format response to match frontend expectations
+            response_config = {
+                "logging": {
+                    "level": config.get('logging.level', 'INFO').lower(),
+                    "file": config.get('logging.path', '/var/log/resolvix.log'),
+                    "max_size_mb": config.get('logging.max_bytes', 10485760) / (1024 * 1024),
+                    "backup_count": config.get('logging.backup_count', 5)
+                },
+                "heartbeat_interval": config.get('intervals.heartbeat', 30),
+                "telemetry_interval": config.get('intervals.telemetry', 3),
+                "control_port": config.get('ports.control', 8754),
+                "livelogs_port": config.get('ports.ws', 8755),
+                "telemetry_port": config.get('ports.telemetry_ws', 8756),
+                "monitored_files": config.get('monitoring.log_files', [])
+            }
+            
+            return jsonify({
+                "status": "success",
+                "config": response_config
+            }), HTTPStatus.OK
+            
+        except Exception as e:
+            logger.error(f"Get config error: {e}")
+            return jsonify({"status": "error", "error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+    
+    @app.route("/config/update", methods=["POST"])
+    def update_config_simplified():
+        """POST /config/update - Simplified config update endpoint for frontend"""
+        if not CONFIG_STORE_AVAILABLE:
+            return jsonify({"status": "error", "error": "Config store not available"}), HTTPStatus.SERVICE_UNAVAILABLE
+        
+        try:
+            updates = request.get_json()
+            
+            if not updates:
+                return jsonify({
+                    "status": "error",
+                    "error": "No updates provided"
+                }), HTTPStatus.BAD_REQUEST
+            
+            config = get_config()
+            updated_fields = []
+            restarted_services = []
+            
+            # Handle logging updates
+            if 'logging' in updates:
+                if 'level' in updates['logging']:
+                    new_level = updates['logging']['level'].upper()
+                    
+                    # Validate log level
+                    valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+                    if new_level not in valid_levels:
+                        return jsonify({
+                            "status": "error",
+                            "error": f"Invalid log level. Must be one of: {', '.join(valid_levels)}",
+                            "field": "logging.level"
+                        }), HTTPStatus.BAD_REQUEST
+                    
+                    # Update config
+                    config.set('logging.level', new_level)
+                    updated_fields.append('logging.level')
+                    
+                    # Apply immediately (hot reload)
+                    level_map = {
+                        'DEBUG': logging.DEBUG,
+                        'INFO': logging.INFO,
+                        'WARNING': logging.WARNING,
+                        'ERROR': logging.ERROR,
+                        'CRITICAL': logging.CRITICAL
+                    }
+                    logging.getLogger('resolvix').setLevel(level_map[new_level])
+                    logger.info(f"[Config] Logging level changed to {new_level}")
+            
+            # Handle heartbeat interval
+            if 'heartbeat_interval' in updates:
+                config.set('intervals.heartbeat', updates['heartbeat_interval'])
+                updated_fields.append('heartbeat_interval')
+                restarted_services.append('heartbeat')
+            
+            # Handle telemetry interval
+            if 'telemetry_interval' in updates:
+                config.set('intervals.telemetry', updates['telemetry_interval'])
+                updated_fields.append('telemetry_interval')
+                restarted_services.append('telemetry')
+            
+            # Save to disk
+            config.save()
+            
+            return jsonify({
+                "status": "success",
+                "message": "Configuration updated successfully",
+                "updated_fields": updated_fields,
+                "restarted_services": restarted_services
+            }), HTTPStatus.OK
+            
+        except Exception as e:
+            logger.error(f"Update config error: {e}")
+            return jsonify({"status": "error", "error": str(e)}), HTTPStatus.INTERNAL_SERVER_ERROR
+    
+    # Full-featured config endpoints (backward compatibility)
     @app.route("/api/config", methods=["GET"])
     def get_configuration():
         """GET /api/config - Return current daemon configuration (non-secrets)"""
