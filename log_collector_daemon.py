@@ -1441,6 +1441,208 @@ def make_app(daemon: LogCollectorDaemon):
 
         return jsonify({'success': True, 'schema': schema}), HTTPStatus.OK
 
+    @app.route("/api/config/monitored_files/add", methods=["POST"])
+    def add_monitored_files_config():
+        """
+        POST /api/config/monitored_files/add - Add new log files to monitoring
+        
+        Request body:
+        {
+            "files": [
+                {
+                    "path": "/var/log/apache2/error.log",
+                    "label": "apache_errors",
+                    "priority": "high",
+                    "enabled": true
+                }
+            ]
+        }
+        
+        Response:
+        {
+            "status": "success",
+            "message": "Added 2 log files",
+            "added_files": ["/var/log/apache2/error.log", ...],
+            "monitoring": true
+        }
+        """
+        try:
+            data = request.get_json()
+            
+            # Validate request body
+            if not data or 'files' not in data:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No files provided'
+                }), HTTPStatus.BAD_REQUEST
+            
+            files = data['files']
+            
+            if not isinstance(files, list) or len(files) == 0:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No files provided'
+                }), HTTPStatus.BAD_REQUEST
+            
+            added_files = []
+            failed_files = []
+            
+            # Get current labels for duplicate detection
+            current_labels = [f.get('label', '') for f in daemon.log_files]
+            
+            # Validate and process each file
+            for file_data in files:
+                path = file_data.get('path', '').strip()
+                label = file_data.get('label', '').strip()
+                priority = file_data.get('priority', 'medium').strip().lower()
+                enabled = file_data.get('enabled', True)
+                
+                # Validation 1: Check if path is provided
+                if not path:
+                    failed_files.append({
+                        'path': '',
+                        'error': 'Path is required'
+                    })
+                    continue
+                
+                # Validation 2: Check if path is absolute
+                if not os.path.isabs(path):
+                    failed_files.append({
+                        'path': path,
+                        'error': 'Path must be absolute'
+                    })
+                    continue
+                
+                # Validation 3: Check if file exists
+                if not os.path.exists(path):
+                    failed_files.append({
+                        'path': path,
+                        'error': 'File not found'
+                    })
+                    continue
+                
+                # Validation 4: Check if it's a regular file
+                if not os.path.isfile(path):
+                    failed_files.append({
+                        'path': path,
+                        'error': 'Not a regular file'
+                    })
+                    continue
+                
+                # Validation 5: Check if file is readable
+                if not os.access(path, os.R_OK):
+                    failed_files.append({
+                        'path': path,
+                        'error': 'Permission denied'
+                    })
+                    continue
+                
+                # Validation 6: Check for duplicate labels
+                if label and label in current_labels:
+                    failed_files.append({
+                        'path': path,
+                        'error': f'Label already exists: {label}'
+                    })
+                    continue
+                
+                # Validation 7: Check if file is already being monitored
+                abs_path = os.path.abspath(path)
+                if any(f['path'] == abs_path for f in daemon.log_files):
+                    failed_files.append({
+                        'path': path,
+                        'error': 'File already being monitored'
+                    })
+                    continue
+                
+                # Validation 8: Validate priority
+                valid_priorities = ['critical', 'high', 'medium', 'low']
+                if priority not in valid_priorities:
+                    priority = 'medium'  # Default to medium if invalid
+                
+                # Generate label if not provided
+                if not label:
+                    label = os.path.basename(path).replace('.log', '').replace('.', '_') or f'log_{len(daemon.log_files) + 1}'
+                
+                # Create file entry
+                file_id = f"file_{len(daemon.log_files) + 1:03d}"
+                new_file = {
+                    'id': file_id,
+                    'path': abs_path,
+                    'label': label,
+                    'priority': priority,
+                    'enabled': enabled,
+                    'created_at': datetime.now().isoformat(),
+                    'last_modified': datetime.now().isoformat()
+                }
+                
+                # Add to daemon's log files list
+                daemon.log_files.append(new_file)
+                current_labels.append(label)  # Add to labels list for next iteration
+                
+                # Start monitoring thread for this file (if enabled)
+                if enabled:
+                    thread = threading.Thread(
+                        target=daemon._monitor_loop,
+                        args=(new_file,),
+                        daemon=True,
+                        name=f"Monitor-{new_file['label']}"
+                    )
+                    thread.start()
+                    daemon._monitor_threads.append(thread)
+                    logger.info(f"[AddMonitoredFiles] Started monitoring: {abs_path} [{label}]")
+                else:
+                    logger.info(f"[AddMonitoredFiles] Added (disabled): {abs_path} [{label}]")
+                
+                added_files.append(abs_path)
+            
+            # Save configuration to persistent storage
+            if CONFIG_STORE_AVAILABLE:
+                try:
+                    config = get_config()
+                    config.set('monitoring.log_files', daemon.log_files)
+                    config.save()
+                    logger.info(f"[AddMonitoredFiles] Configuration saved to disk")
+                except Exception as e:
+                    logger.warning(f"[AddMonitoredFiles] Failed to save to config: {e}")
+            
+            # Determine response type based on results
+            total_files = len(files)
+            added_count = len(added_files)
+            failed_count = len(failed_files)
+            
+            if failed_count == 0 and added_count > 0:
+                # All files added successfully
+                return jsonify({
+                    'status': 'success',
+                    'message': f'Added {added_count} log file{"s" if added_count > 1 else ""}',
+                    'added_files': added_files,
+                    'monitoring': True
+                }), HTTPStatus.OK
+            
+            elif added_count > 0 and failed_count > 0:
+                # Partial success
+                return jsonify({
+                    'status': 'partial',
+                    'message': f'Added {added_count} of {total_files} files',
+                    'added_files': added_files,
+                    'failed_files': failed_files
+                }), 207  # Multi-Status
+            
+            else:
+                # All files failed
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Failed to add any files',
+                    'failed_files': failed_files
+                }), HTTPStatus.BAD_REQUEST
+        
+        except Exception as e:
+            logger.error(f"[AddMonitoredFiles] Error: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': f'Internal server error: {str(e)}'
+            }), HTTPStatus.INTERNAL_SERVER_ERROR
+
     # -------- Monitored Files Management Endpoints --------
     @app.route("/api/monitored-files", methods=["GET"])
     def get_monitored_files():
