@@ -1,12 +1,14 @@
-# Add Monitored Files Endpoint - Implementation Documentation
+# Add & Remove Monitored Files Endpoints - Implementation Documentation
 
 ## Overview
 
-This document describes the newly implemented endpoint for adding log files to the daemon's monitoring system dynamically, without requiring a daemon restart.
+This document describes the endpoints for adding and removing log files to/from the daemon's monitoring system dynamically, without requiring a daemon restart.
 
 ---
 
-## Endpoint Details
+## 1. ADD Monitored Files
+
+### Endpoint Details
 
 **URL:** `POST http://{daemon_ip}:8754/api/config/monitored_files/add`
 
@@ -463,9 +465,272 @@ The label will be auto-generated as `apache2_access`.
 
 ---
 
+## 2. REMOVE Monitored Files
+
+### Endpoint Details
+
+**URL:** `DELETE http://{daemon_ip}:8754/api/config/monitored_files/remove`
+
+**Port:** 8754 (daemon's existing control API port)
+
+**Method:** DELETE
+
+**Content-Type:** application/json
+
+---
+
+### Request Format
+
+```json
+{
+  "labels": ["apache_errors", "nginx_access"]
+}
+```
+
+#### Request Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `labels` | Array | Yes | Array of label strings to remove from monitoring |
+
+---
+
+### Response Formats
+
+#### Success Response (All labels removed)
+
+**HTTP Status:** 200 OK
+
+```json
+{
+  "status": "success",
+  "message": "Removed 2 log files",
+  "removed_labels": ["apache_errors", "nginx_access"]
+}
+```
+
+#### Partial Success Response (Some labels removed)
+
+**HTTP Status:** 207 Multi-Status
+
+```json
+{
+  "status": "partial",
+  "message": "Removed 1 of 3 files",
+  "removed_labels": ["apache_errors"],
+  "not_found": ["nginx_access"],
+  "cannot_remove": ["resolvix_daemon"]
+}
+```
+
+#### Error Response (No labels removed)
+
+**HTTP Status:** 400 Bad Request
+
+```json
+{
+  "status": "error",
+  "message": "Labels not found: apache_errors, nginx_access",
+  "not_found": ["apache_errors", "nginx_access"]
+}
+```
+
+---
+
+### Error Scenarios
+
+| Error Type | Response Field | Description |
+|------------|---------------|-------------|
+| Label not found | `not_found` | Label doesn't exist in monitored files |
+| Cannot remove | `cannot_remove` | File is auto-monitored (e.g., daemon's own log) |
+| No labels provided | - | Request body missing `labels` field or empty array |
+
+---
+
+### Implementation Details
+
+#### What Happens When Removing Files?
+
+1. **Validate Request** - Check `labels` array is provided and non-empty
+2. **Find Files** - Locate files with matching labels in `daemon.log_files`
+3. **Check Protection** - Skip auto-monitored files (e.g., `resolvix_daemon`)
+4. **Remove from List** - Remove file configs from `daemon.log_files`
+5. **Stop Monitoring** - Monitoring threads detect removal and exit naturally
+6. **Save Config** - Update `/etc/resolvix/config.json` with new list
+7. **Return Response** - Report success/partial/failure
+
+#### Thread Cleanup
+
+- Monitoring threads are daemon threads
+- They periodically check if their file is still in `daemon.log_files`
+- When removed, threads exit gracefully on next check
+- No explicit thread termination needed
+
+---
+
+### Testing Examples
+
+#### Test 1: Remove Single File
+
+```bash
+curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
+  -H "Content-Type: application/json" \
+  -d '{
+    "labels": ["system_log"]
+  }'
+```
+
+**Expected Response:**
+```json
+{
+  "status": "success",
+  "message": "Removed 1 log file",
+  "removed_labels": ["system_log"]
+}
+```
+
+---
+
+#### Test 2: Remove Multiple Files
+
+```bash
+curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
+  -H "Content-Type: application/json" \
+  -d '{
+    "labels": ["apache_errors", "nginx_access", "mysql_errors"]
+  }'
+```
+
+**Expected Response:**
+```json
+{
+  "status": "success",
+  "message": "Removed 3 log files",
+  "removed_labels": ["apache_errors", "nginx_access", "mysql_errors"]
+}
+```
+
+---
+
+#### Test 3: Remove Non-Existent Label
+
+```bash
+curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
+  -H "Content-Type: application/json" \
+  -d '{
+    "labels": ["fake_log"]
+  }'
+```
+
+**Expected Response (400 Bad Request):**
+```json
+{
+  "status": "error",
+  "message": "Labels not found: fake_log",
+  "not_found": ["fake_log"],
+  "cannot_remove": null
+}
+```
+
+---
+
+#### Test 4: Try to Remove Auto-Monitored File
+
+```bash
+curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
+  -H "Content-Type: application/json" \
+  -d '{
+    "labels": ["resolvix_daemon"]
+  }'
+```
+
+**Expected Response (400 Bad Request):**
+```json
+{
+  "status": "error",
+  "message": "Cannot remove auto-monitored files: resolvix_daemon",
+  "not_found": null,
+  "cannot_remove": ["resolvix_daemon"]
+}
+```
+
+---
+
+#### Test 5: Mixed Success/Failure
+
+```bash
+curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
+  -H "Content-Type: application/json" \
+  -d '{
+    "labels": ["apache_errors", "fake_log", "resolvix_daemon"]
+  }'
+```
+
+**Expected Response (207 Multi-Status):**
+```json
+{
+  "status": "partial",
+  "message": "Removed 1 of 3 files",
+  "removed_labels": ["apache_errors"],
+  "not_found": ["fake_log"],
+  "cannot_remove": ["resolvix_daemon"]
+}
+```
+
+---
+
+#### Test 6: Verify Removal
+
+After removing files, verify they're gone:
+
+```bash
+curl http://172.31.7.124:8754/api/monitored-files
+```
+
+**Expected:** Removed files should not appear in the list
+
+---
+
+### Complete Add/Remove Workflow
+
+```bash
+# 1. Add a test file
+curl -X POST http://172.31.7.124:8754/api/config/monitored_files/add \
+  -H "Content-Type: application/json" \
+  -d '{
+    "files": [{
+      "path": "/var/log/test.log",
+      "label": "test_log",
+      "priority": "low"
+    }]
+  }'
+
+# 2. Verify it was added
+curl http://172.31.7.124:8754/api/monitored-files | jq '.files[] | select(.label=="test_log")'
+
+# 3. Generate test error
+echo "ERROR: Test message" | sudo tee -a /var/log/test.log
+
+# 4. Check daemon detected it
+sudo tail -f /var/log/resolvix.log | grep "Issue detected"
+
+# 5. Remove the file
+curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
+  -H "Content-Type: application/json" \
+  -d '{"labels": ["test_log"]}'
+
+# 6. Verify removal
+curl http://172.31.7.124:8754/api/monitored-files | jq '.files[] | select(.label=="test_log")'
+# Should return nothing
+```
+
+---
+
 ## Integration with Backend
 
-The backend at `api.resolvix.app` should:
+The backend at `api.resolvix.app` should handle both ADD and REMOVE operations:
+
+### ADD Files Integration
 
 1. **Authenticate User** - Verify JWT token
 2. **Get Node IP** - Fetch node IP from database
@@ -473,8 +738,17 @@ The backend at `api.resolvix.app` should:
 4. **Store in Database** - Save configuration after daemon confirms
 5. **Return Response** - Forward daemon response to frontend
 
-### Backend Flow Diagram
+### REMOVE Files Integration
 
+1. **Authenticate User** - Verify JWT token
+2. **Get Node IP** - Fetch node IP from database
+3. **Forward Request** - DELETE to `http://{node_ip}:8754/api/config/monitored_files/remove`
+4. **Update Database** - Remove configurations from database
+5. **Return Response** - Forward daemon response to frontend
+
+### Backend Flow Diagrams
+
+#### ADD Flow
 ```
 Frontend
    ↓ (User adds files)
@@ -483,6 +757,22 @@ Backend API
 Daemon API (172.31.7.124:8754)
    ↓ (Validate & add files)
    ↓ (Start monitoring threads)
+   ↓ (Save config to disk)
+Backend API
+   ↓ (Store config in DB)
+Frontend
+   ↓ (Display success/error)
+```
+
+#### REMOVE Flow
+```
+Frontend
+   ↓ (User removes files)
+Backend API
+   ↓ (GET node IP from DB)
+Daemon API (172.31.7.124:8754)
+   ↓ (Find & remove files)
+   ↓ (Stop monitoring threads)
    ↓ (Save config to disk)
 Backend API
    ↓ (Store config in DB)
@@ -711,22 +1001,25 @@ After adding files, the configuration is saved to `/etc/resolvix/config.json`:
 
 ## Related Endpoints
 
-| Endpoint                      | Method | Description                 |
-| ----------------------------- | ------ | --------------------------- |
-| `/api/monitored-files`        | GET    | List all monitored files    |
-| `/api/monitored-files`        | POST   | Legacy add files endpoint   |
-| `/api/monitored-files/{id}`   | PUT    | Update file configuration   |
-| `/api/monitored-files/{id}`   | DELETE | Remove file from monitoring |
-| `/api/monitored-files/reload` | POST   | Reload monitoring config    |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/config/monitored_files/add` | POST | Add new log files to monitoring |
+| `/api/config/monitored_files/remove` | DELETE | Remove log files by label |
+| `/api/monitored-files` | GET | List all monitored files |
+| `/api/monitored-files` | POST | Legacy add files endpoint |
+| `/api/monitored-files/{id}` | PUT | Update file configuration |
+| `/api/monitored-files/{id}` | DELETE | Remove file by ID |
+| `/api/monitored-files/reload` | POST | Reload monitoring config |
 
 ---
 
 ## Summary
 
+### ADD Endpoint
+
 ✅ **Endpoint:** `POST /api/config/monitored_files/add`
 
 ✅ **Features:**
-
 - Comprehensive validation (8 checks per file)
 - Immediate monitoring without restart
 - Persistent configuration
@@ -737,24 +1030,37 @@ After adding files, the configuration is saved to `/etc/resolvix/config.json`:
 
 ✅ **Location:** [log_collector_daemon.py](../log_collector_daemon.py) (lines ~1443-1643)
 
+### REMOVE Endpoint
+
+✅ **Endpoint:** `DELETE /api/config/monitored_files/remove`
+
+✅ **Features:**
+- Remove multiple files by label
+- Protection for auto-monitored files
+- Graceful thread cleanup
+- Persistent configuration updates
+- Partial success support
+
+✅ **Status:** Fully implemented and ready for testing
+
+✅ **Location:** [log_collector_daemon.py](../log_collector_daemon.py) (lines ~1645-1777)
+
 ---
 
 ## Next Steps
 
 1. **Backend Integration:**
-
-   - Implement endpoint in backend API
+   - Implement ADD and REMOVE endpoints in backend API
    - Add database storage for configurations
-   - Create frontend UI for adding files
+   - Create frontend UI for adding/removing files
 
 2. **Testing:**
-
    - Run all test cases listed above
    - Test with various file types and paths
-   - Verify monitoring works correctly
+   - Verify monitoring starts and stops correctly
+   - Test edge cases (auto-monitored files, duplicates, etc.)
 
 3. **Documentation:**
-
    - Update API documentation
    - Add to Swagger/OpenAPI spec
    - Document for end users

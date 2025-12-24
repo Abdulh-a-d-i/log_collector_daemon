@@ -1643,6 +1643,140 @@ def make_app(daemon: LogCollectorDaemon):
                 'message': f'Internal server error: {str(e)}'
             }), HTTPStatus.INTERNAL_SERVER_ERROR
 
+    @app.route("/api/config/monitored_files/remove", methods=["DELETE"])
+    def remove_monitored_files_config():
+        """
+        DELETE /api/config/monitored_files/remove - Remove log files from monitoring by label
+        
+        Request body:
+        {
+            "labels": ["apache_errors", "nginx_access"]
+        }
+        
+        Response:
+        {
+            "status": "success",
+            "message": "Removed 2 log files",
+            "removed_labels": ["apache_errors", "nginx_access"]
+        }
+        """
+        try:
+            data = request.get_json()
+            
+            # Validate request body
+            if not data or 'labels' not in data:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No labels provided'
+                }), HTTPStatus.BAD_REQUEST
+            
+            labels_to_remove = data['labels']
+            
+            if not isinstance(labels_to_remove, list) or len(labels_to_remove) == 0:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No labels provided'
+                }), HTTPStatus.BAD_REQUEST
+            
+            removed_labels = []
+            not_found_labels = []
+            cannot_remove_labels = []
+            
+            # Track original count
+            original_count = len(daemon.log_files)
+            
+            # Find files to remove
+            files_to_remove = []
+            for label in labels_to_remove:
+                found = False
+                for file_config in daemon.log_files:
+                    if file_config.get('label') == label:
+                        # Check if it's auto-monitored (cannot be deleted)
+                        if file_config.get('auto_monitor'):
+                            cannot_remove_labels.append(label)
+                            logger.warning(f"[RemoveMonitoredFiles] Cannot remove auto-monitored file: {label}")
+                        else:
+                            files_to_remove.append(file_config)
+                            removed_labels.append(label)
+                        found = True
+                        break
+                
+                if not found:
+                    not_found_labels.append(label)
+            
+            # Remove files from daemon's list
+            for file_config in files_to_remove:
+                try:
+                    daemon.log_files.remove(file_config)
+                    logger.info(f"[RemoveMonitoredFiles] Removed from monitoring: {file_config['path']} [{file_config['label']}]")
+                except ValueError:
+                    logger.warning(f"[RemoveMonitoredFiles] File already removed: {file_config['label']}")
+            
+            # Note: Monitoring threads are daemon threads and will stop naturally
+            # They check if the file is still in daemon.log_files and exit when removed
+            
+            # Save configuration to persistent storage
+            if removed_labels and CONFIG_STORE_AVAILABLE:
+                try:
+                    config = get_config()
+                    config.set('monitoring.log_files', daemon.log_files)
+                    config.save()
+                    logger.info(f"[RemoveMonitoredFiles] Configuration saved to disk")
+                except Exception as e:
+                    logger.warning(f"[RemoveMonitoredFiles] Failed to save to config: {e}")
+            
+            # Determine response type based on results
+            removed_count = len(removed_labels)
+            
+            if removed_count > 0 and len(not_found_labels) == 0 and len(cannot_remove_labels) == 0:
+                # All labels removed successfully
+                return jsonify({
+                    'status': 'success',
+                    'message': f'Removed {removed_count} log file{"s" if removed_count > 1 else ""}',
+                    'removed_labels': removed_labels
+                }), HTTPStatus.OK
+            
+            elif removed_count > 0:
+                # Partial success - some removed, some failed
+                response = {
+                    'status': 'partial',
+                    'message': f'Removed {removed_count} of {len(labels_to_remove)} files',
+                    'removed_labels': removed_labels
+                }
+                
+                if not_found_labels:
+                    response['not_found'] = not_found_labels
+                
+                if cannot_remove_labels:
+                    response['cannot_remove'] = cannot_remove_labels
+                
+                return jsonify(response), 207  # Multi-Status
+            
+            else:
+                # Nothing was removed
+                error_message = 'Failed to remove any files'
+                
+                if not_found_labels and cannot_remove_labels:
+                    error_message = f'Labels not found or cannot be removed'
+                elif not_found_labels:
+                    error_message = f'Labels not found: {", ".join(not_found_labels)}'
+                elif cannot_remove_labels:
+                    error_message = f'Cannot remove auto-monitored files: {", ".join(cannot_remove_labels)}'
+                
+                return jsonify({
+                    'status': 'error',
+                    'message': error_message,
+                    'not_found': not_found_labels if not_found_labels else None,
+                    'cannot_remove': cannot_remove_labels if cannot_remove_labels else None
+                }), HTTPStatus.BAD_REQUEST
+        
+        except Exception as e:
+            logger.error(f"[RemoveMonitoredFiles] Error: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': f'Internal server error: {str(e)}'
+            }), HTTPStatus.INTERNAL_SERVER_ERROR
+
     # -------- Monitored Files Management Endpoints --------
     @app.route("/api/monitored-files", methods=["GET"])
     def get_monitored_files():
