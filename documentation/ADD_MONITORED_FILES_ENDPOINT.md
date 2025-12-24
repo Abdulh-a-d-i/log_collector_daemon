@@ -489,9 +489,9 @@ The label will be auto-generated as `apache2_access`.
 
 #### Request Parameters
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `labels` | Array | Yes | Array of label strings to remove from monitoring |
+| Field    | Type  | Required | Description                                      |
+| -------- | ----- | -------- | ------------------------------------------------ |
+| `labels` | Array | Yes      | Array of label strings to remove from monitoring |
 
 ---
 
@@ -539,11 +539,11 @@ The label will be auto-generated as `apache2_access`.
 
 ### Error Scenarios
 
-| Error Type | Response Field | Description |
-|------------|---------------|-------------|
-| Label not found | `not_found` | Label doesn't exist in monitored files |
-| Cannot remove | `cannot_remove` | File is auto-monitored (e.g., daemon's own log) |
-| No labels provided | - | Request body missing `labels` field or empty array |
+| Error Type         | Response Field  | Description                                        |
+| ------------------ | --------------- | -------------------------------------------------- |
+| Label not found    | `not_found`     | Label doesn't exist in monitored files             |
+| Cannot remove      | `cannot_remove` | File is auto-monitored (e.g., daemon's own log)    |
+| No labels provided | -               | Request body missing `labels` field or empty array |
 
 ---
 
@@ -581,6 +581,7 @@ curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
 ```
 
 **Expected Response:**
+
 ```json
 {
   "status": "success",
@@ -602,6 +603,7 @@ curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
 ```
 
 **Expected Response:**
+
 ```json
 {
   "status": "success",
@@ -623,6 +625,7 @@ curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
 ```
 
 **Expected Response (400 Bad Request):**
+
 ```json
 {
   "status": "error",
@@ -645,6 +648,7 @@ curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
 ```
 
 **Expected Response (400 Bad Request):**
+
 ```json
 {
   "status": "error",
@@ -667,6 +671,7 @@ curl -X DELETE http://172.31.7.124:8754/api/config/monitored_files/remove \
 ```
 
 **Expected Response (207 Multi-Status):**
+
 ```json
 {
   "status": "partial",
@@ -749,6 +754,7 @@ The backend at `api.resolvix.app` should handle both ADD and REMOVE operations:
 ### Backend Flow Diagrams
 
 #### ADD Flow
+
 ```
 Frontend
    ↓ (User adds files)
@@ -765,6 +771,7 @@ Frontend
 ```
 
 #### REMOVE Flow
+
 ```
 Frontend
    ↓ (User removes files)
@@ -1001,15 +1008,15 @@ After adding files, the configuration is saved to `/etc/resolvix/config.json`:
 
 ## Related Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/config/monitored_files/add` | POST | Add new log files to monitoring |
-| `/api/config/monitored_files/remove` | DELETE | Remove log files by label |
-| `/api/monitored-files` | GET | List all monitored files |
-| `/api/monitored-files` | POST | Legacy add files endpoint |
-| `/api/monitored-files/{id}` | PUT | Update file configuration |
-| `/api/monitored-files/{id}` | DELETE | Remove file by ID |
-| `/api/monitored-files/reload` | POST | Reload monitoring config |
+| Endpoint                             | Method | Description                     |
+| ------------------------------------ | ------ | ------------------------------- |
+| `/api/config/monitored_files/add`    | POST   | Add new log files to monitoring |
+| `/api/config/monitored_files/remove` | DELETE | Remove log files by label       |
+| `/api/monitored-files`               | GET    | List all monitored files        |
+| `/api/monitored-files`               | POST   | Legacy add files endpoint       |
+| `/api/monitored-files/{id}`          | PUT    | Update file configuration       |
+| `/api/monitored-files/{id}`          | DELETE | Remove file by ID               |
+| `/api/monitored-files/reload`        | POST   | Reload monitoring config        |
 
 ---
 
@@ -1020,6 +1027,7 @@ After adding files, the configuration is saved to `/etc/resolvix/config.json`:
 ✅ **Endpoint:** `POST /api/config/monitored_files/add`
 
 ✅ **Features:**
+
 - Comprehensive validation (8 checks per file)
 - Immediate monitoring without restart
 - Persistent configuration
@@ -1035,6 +1043,7 @@ After adding files, the configuration is saved to `/etc/resolvix/config.json`:
 ✅ **Endpoint:** `DELETE /api/config/monitored_files/remove`
 
 ✅ **Features:**
+
 - Remove multiple files by label
 - Protection for auto-monitored files
 - Graceful thread cleanup
@@ -1050,17 +1059,20 @@ After adding files, the configuration is saved to `/etc/resolvix/config.json`:
 ## Next Steps
 
 1. **Backend Integration:**
+
    - Implement ADD and REMOVE endpoints in backend API
    - Add database storage for configurations
    - Create frontend UI for adding/removing files
 
 2. **Testing:**
+
    - Run all test cases listed above
    - Test with various file types and paths
    - Verify monitoring starts and stops correctly
    - Test edge cases (auto-monitored files, duplicates, etc.)
 
 3. **Documentation:**
+
    - Update API documentation
    - Add to Swagger/OpenAPI spec
    - Document for end users
