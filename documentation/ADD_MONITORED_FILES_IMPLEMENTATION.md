@@ -3,6 +3,7 @@
 ## Date: December 24, 2025
 
 ## Overview
+
 Successfully implemented a new REST API endpoint that allows the daemon to dynamically add log files to monitoring without requiring a restart.
 
 ---
@@ -10,6 +11,7 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
 ## What Was Implemented
 
 ### ✅ New Endpoint
+
 - **URL:** `POST /api/config/monitored_files/add`
 - **Port:** 8754
 - **Location:** [log_collector_daemon.py](../log_collector_daemon.py) lines 1443-1643
@@ -17,6 +19,7 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
 ### ✅ Key Features
 
 1. **Comprehensive Validation**
+
    - Path must be absolute
    - File must exist on filesystem
    - File must be a regular file (not directory)
@@ -26,17 +29,20 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
    - Priority validation (critical/high/medium/low)
 
 2. **Immediate Monitoring**
+
    - New monitoring thread spawned immediately
    - No daemon restart required
    - File tailed from current position (only new lines)
    - Thread-safe concurrent access
 
 3. **Persistent Configuration**
+
    - Changes saved to `/etc/resolvix/config.json`
    - Configuration survives daemon restarts
    - Automatic backup on save
 
 4. **Intelligent Error Handling**
+
    - Individual file validation
    - Partial success support (some pass, some fail)
    - Detailed error messages for each failure
@@ -52,6 +58,7 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
 ## Request/Response Format
 
 ### Request Example
+
 ```json
 {
   "files": [
@@ -66,19 +73,18 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
 ```
 
 ### Success Response (200 OK)
+
 ```json
 {
   "status": "success",
   "message": "Added 2 log files",
-  "added_files": [
-    "/var/log/apache2/error.log",
-    "/var/log/nginx/access.log"
-  ],
+  "added_files": ["/var/log/apache2/error.log", "/var/log/nginx/access.log"],
   "monitoring": true
 }
 ```
 
 ### Partial Success Response (207 Multi-Status)
+
 ```json
 {
   "status": "partial",
@@ -98,6 +104,7 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
 ## Implementation Details
 
 ### Validation Flow
+
 1. Check if request body contains "files" array
 2. For each file:
    - Validate path is provided
@@ -117,12 +124,12 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
 
 ## HTTP Status Codes
 
-| Code | Scenario |
-|------|----------|
-| 200 OK | All files added successfully |
-| 207 Multi-Status | Some files added, some failed |
-| 400 Bad Request | No files provided or all files failed |
-| 500 Internal Server Error | Unexpected server error |
+| Code                      | Scenario                              |
+| ------------------------- | ------------------------------------- |
+| 200 OK                    | All files added successfully          |
+| 207 Multi-Status          | Some files added, some failed         |
+| 400 Bad Request           | No files provided or all files failed |
+| 500 Internal Server Error | Unexpected server error               |
 
 ---
 
@@ -140,7 +147,7 @@ Successfully implemented a new REST API endpoint that allows the daemon to dynam
 ✅ Files added successfully  
 ✅ Monitoring starts immediately  
 ✅ Configuration persists  
-✅ Errors handled gracefully  
+✅ Errors handled gracefully
 
 ---
 
